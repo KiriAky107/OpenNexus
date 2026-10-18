@@ -131,6 +131,8 @@ public final class RuntimeProbe extends Instrumentation {
                 case "reference-unsupported":
                 case "reference-cold":
                     originalLocalReference(phase); break;
+                case "candidate-locale-seed": create("New canvas",CANVAS);save();break;
+                case "candidate-locale-open": open(CANVAS);waitLabel("Free canvas");break;
                 case "candidate-language-en": case "candidate-language-zh":
                 case "candidate-language-return": case "candidate-language-cold":
                     candidateLanguageRead(phase); break;

@@ -8,19 +8,74 @@ from android_runtime_probe import Probe,BODY,DRAFT,RICH_TEXT
 from android_workflow_gate import admitted
 
 class CandidateReadinessBoundaries(unittest.TestCase):
+    @patch.object(candidate,'require_hosted_emulator')
+    def test_language_can_start_after_export_has_intentionally_stopped_the_app(self,_):
+        with tempfile.TemporaryDirectory() as root:
+            probe=self.probe(root)
+            def original_pid(*args,**kwargs):
+                if probe.phase.call_count<3:raise RuntimeError('Previous export deliberately stopped this app; no PID yet')
+                return SimpleNamespace(stdout=b'201' if probe.phase.call_count==3 else b'202')
+            probe.shell.side_effect=original_pid
+            with patch.object(candidate,'snapshot',side_effect=self.state):candidate.verify_candidate(probe)
+            self.assertEqual(probe.shell.call_count,2)
+            proof=json.loads((probe.output/'candidate-readiness-proof.json').read_bytes())
+            self.assertTrue(proof['passed']);self.assertEqual(proof['cold_PIDs'],[201,202])
+
     def test_remaining_mode_does_not_run_the_already_accepted_native_suites(self):
-        for scope in ('lifecycle-remaining','lifecycle-editor-remaining'):
+        for scope in ('lifecycle-remaining','lifecycle-editor-remaining','candidate-languages'):
             probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope)
             probe.device=Mock();probe.shell=Mock()
             probe.native_keystore_tests();probe.device.assert_not_called();probe.shell.assert_not_called()
 
     def test_remaining_workflow_can_only_reuse_a_fixed_apk(self):
         root=Path(__file__).resolve().parents[1];flow=yaml.load((root/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
-        for scope in ('lifecycle-remaining','lifecycle-editor-remaining'):
+        for scope in ('lifecycle-remaining','lifecycle-editor-remaining','candidate-languages'):
             for reuse in ('','39148381613'):
                 for job in ('debug-apk','desktop-startup','desktop-pair','android-desktop-pair'):
                     self.assertFalse(admitted(flow['jobs'][job]['if'],scope,reuse=reuse,build='skipped'))
             self.assertTrue(admitted(flow['jobs']['emulator-runtime']['if'],scope,reuse='39148381613',build='skipped'))
+
+    def test_standalone_language_scope_does_not_replay_old_content_phases(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='candidate-languages');probe.boot=Mock();probe.phase=Mock()
+        with patch.object(candidate,'run_languages') as run:probe.run()
+        probe.boot.assert_called_once();run.assert_called_once_with(probe);probe.phase.assert_not_called()
+
+    def test_language_fixture_is_declared_crlf_with_one_original_text_node(self):
+        value=json.loads(candidate.LOCALE_FIXTURE);self.assertEqual(len(value['nodes']),1);self.assertEqual(value['edges'],[])
+        self.assertEqual(value['nodes'][0]['text'],candidate.NODE);self.assertIn('vendor',value['nodes'][0]);self.assertIn('vendor-root',value)
+        self.assertIn(b'\r\n',candidate.LOCALE_FIXTURE);self.assertNotIn(b'\n',candidate.LOCALE_FIXTURE.replace(b'\r\n',b''))
+
+    @patch.object(candidate,'require_hosted_emulator')
+    def test_language_runner_refuses_native_suite_or_old_scope_before_seed(self,_):
+        for scope,suite in [('candidate-languages',{'tests':5}),('lifecycle',None)]:
+            probe=Mock();probe.args=SimpleNamespace(scope=scope,serial='emulator-5562');probe.keystore_test_result=suite
+            with self.assertRaises(RuntimeError):candidate.run_languages(probe)
+            probe.phase.assert_not_called();probe.device.assert_not_called()
+
+    @patch.object(candidate,'require_hosted_emulator')
+    def test_language_setup_has_one_gui_save_and_declared_fixture_before_readonly_verify(self,_):
+        self._language_seed(False)
+
+    @patch.object(candidate,'require_hosted_emulator')
+    def test_changed_setup_file_identity_stops_before_any_language_input(self,_):
+        self._language_seed(True)
+
+    def _language_seed(self,changed):
+        with tempfile.TemporaryDirectory() as root,patch.dict('os.environ',{'GITHUB_RUN_ID':'1'}):
+            probe=Mock();probe.args=SimpleNamespace(scope='candidate-languages',serial='emulator-5562',tools_commit='tools',commit='compiled')
+            probe.output=Path(root);probe.binding={'sha256':'fixed'};probe.keystore_test_result=None;probe.root='owned/'
+            probe.original.side_effect=[b'{"nodes":[],"edges":[]}',candidate.LOCALE_FIXTURE,candidate.LOCALE_FIXTURE]
+            before={'files':[{'id':'original'}]};after={'files':[{'id':'changed' if changed else 'original'}]}
+            with patch.object(candidate,'snapshot',side_effect=[before,after]),patch('android_canvas_graph_probe.saved_original',return_value={'operation_id':'original'}),patch.object(candidate,'verify_candidate') as verify:
+                if changed:
+                    with self.assertRaises(RuntimeError):candidate.run_languages(probe)
+                    verify.assert_not_called()
+                else:candidate.run_languages(probe);verify.assert_called_once_with(probe)
+            self.assertEqual([v.args[0] for v in probe.phase.call_args_list],list(candidate.SEED_STEPS))
+            probe.enable_test_ime.assert_not_called();self.assertEqual(probe.device.call_count,1)
+            self.assertEqual(probe.device.call_args.kwargs['input'],candidate.LOCALE_FIXTURE)
+            proof=json.loads((probe.output/'candidate-languages-seed-proof.json').read_bytes());self.assertEqual(proof['passed'],not changed)
+            self.assertTrue(proof['declared_synthetic_one_node_fixture_not_GUI_node_creation'])
 
     def test_content_remaining_excludes_the_original_auth_read_and_theme_actions(self):
         self._remaining_ui('lifecycle-editor-remaining',False)
@@ -60,7 +115,7 @@ class CandidateReadinessBoundaries(unittest.TestCase):
 
     def test_readonly_auth_scroll_is_owned_bounded_and_never_sends_credentials(self):
         root=Path(__file__).resolve().parents[1];java=(root/'scripts/android-runtime/RuntimeProbe.java').read_text('utf-8')
-        method=java.split('private void readonlyAuthStatus()',1)[1].split('private void candidateLanguageRead',1)[0]
+        method=java.split('private void readonlyAuthStatus()',1)[1].split('\n    private ',1)[0]
         for required in ('within(node,"Settings")','within(node,"Saved connections")','matches.size()<=1','if(!shown)','ACTION_SHOW_ON_SCREEN','bounds.height()>0','window.contains','credential_input=0'):
             self.assertIn(required,method)
         for forbidden in ('setText(', 'inputText(', 'activate(', 'save();', 'Sign in'):
@@ -96,7 +151,7 @@ class CandidateReadinessBoundaries(unittest.TestCase):
         (probe.output/'window-insets-device-proof.json').write_text(json.dumps({'passed':True,'tests':3,'actual_keyboard_visibility_verified':False}),'utf-8')
         original=json.dumps({'nodes':[{'id':'own-node','text':candidate.NODE}],'edges':[]},ensure_ascii=False).encode()
         probe.original.return_value=original
-        probe.shell.side_effect=[SimpleNamespace(stdout=str(i).encode()) for i in [101,201,201,201,202]]
+        probe.shell.side_effect=[SimpleNamespace(stdout=str(i).encode()) for i in [201,202]]
         def phase(name,**kwargs):
             if change=='bytes' and name=='candidate-language-zh':probe.original.return_value=original+b' '
             marker='CANDIDATE_LOCALE_READ '+name+' '
