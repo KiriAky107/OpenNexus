@@ -19,6 +19,7 @@ TEXT,GROUP='实际中文输入 😀','实际分组 😀'
 FILE,URL='资料/原笔记😀.md','https://example.invalid/owned-canvas'
 EDGE='实际连接 😀'
 A,B,E=('f58f7b80-8bf1-42da-a619-f1e08c70c301','f58f7b80-8bf1-42da-a619-f1e08c70c302','f58f7b80-8bf1-42da-a619-f1e08c70c303')
+SEED_CONNECTION='f58f7b80-8bf1-42da-a619-f1e08c70c308'
 FIXTURE=encoded({'nodes':[dict(id=A,type='text',x=0,y=0,width=120,height=100,text=SEED_A,vendor={'keep':['甲',True,None]}),
     dict(id=B,type='text',x=150,y=0,width=120,height=100,text=SEED_B,vendor={'keep':['乙',17]})],
     'edges':[dict(id=E,fromNode=A,toNode=B,label='Original seed edge',vendor={'opaque':[True,19]})],
@@ -30,7 +31,7 @@ UUID=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 def graph_steps(remaining):
     require(type(remaining) is bool,'GRAPH_EXPLICIT_SELECTION')
-    return tuple(x for x in STEPS if not remaining or x not in ('graph-add-text','graph-add-file','graph-add-link','graph-add-group'))
+    return tuple(x for x in STEPS if not remaining or x not in ('graph-add-text','graph-add-file','graph-add-link','graph-add-group','graph-connect'))
 
 def initial_fixture(remaining):
     require(type(remaining) is bool,'GRAPH_EXPLICIT_FIXTURE_SELECTION')
@@ -43,6 +44,7 @@ def initial_fixture(remaining):
     ids['group']='f58f7b80-8bf1-42da-a619-f1e08c70c307'
     value['nodes'].insert(0,dict(id=ids['group'],type='group',x=350,y=0,width=120,height=100,label=GROUP,
         vendor={'synthetic_fixture_only':True}))
+    value['edges'].append(dict(id=SEED_CONNECTION,fromNode=ids['link'],toNode=ids['file'],label='',vendor={'synthetic_fixture_only':True}))
     return encoded(value),ids
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
@@ -111,6 +113,7 @@ def run_canvas_graph(probe):
     report={'passed':False,'run_id':os.environ['GITHUB_RUN_ID'],'tools_source':probe.args.tools_commit,
         'compiled_source':probe.args.commit,'APK_sha256':probe.binding['sha256'],'scope':probe.args.scope,
         'four_type_GUI_additions_and_composition_not_replayed':remaining,'synthetic_fixture_four_type_ids':fixture_ids,
+        'connection_GUI_not_replayed':remaining,'synthetic_connection_edge_ID':SEED_CONNECTION if remaining else None,
         'physical_phone_touch_geometry_midwrite_or_whole_A3C_complete':False,'executed_steps':[],'saves':[]}
     current=None
     def phase(name):
@@ -147,8 +150,13 @@ def run_canvas_graph(probe):
         if not remaining:
             require((probe.output/'graph-add-text.log').read_text('utf-8').count(
                 'ORIGINAL_GRAPH_IME compose=2 confirm=1 save_during_composition=0')==1,'GRAPH_ACTUAL_COMPOSITION_MARKER')
-        after,new=phase('graph-connect');edge=added_edge(raw,new,ids['link'],ids['file'])
-        report['saves'].append(saved_original(before,after,new));before,raw=after,new
+        if remaining:
+            edge=SEED_CONNECTION
+            seeded=next(e for e in graph(raw)['edges'] if e['id']==edge)
+            require(seeded['fromNode']==ids['link'] and seeded['toNode']==ids['file'] and seeded['label']=='','GRAPH_EXPLICIT_SYNTHETIC_CONNECTION')
+        else:
+            after,new=phase('graph-connect');edge=added_edge(raw,new,ids['link'],ids['file'])
+            report['saves'].append(saved_original(before,after,new));before,raw=after,new
         after,new=phase('graph-edge-label');edited_edge(raw,new,edge,{'label':EDGE})
         report['saves'].append(saved_original(before,after,new));before,raw=after,new
         copy_state,copy_raw=phase('graph-copy');identical_original_bytes(raw,copy_raw)
@@ -178,7 +186,8 @@ def run_canvas_graph(probe):
         require(re.fullmatch(rb'[1-9][0-9]{0,9}',before_cold_pid) and re.fullmatch(rb'[1-9][0-9]{0,9}',cold_pid)
             and cold_pid!=before_cold_pid,'GRAPH_ACTUAL_NEW_PID')
         require(tuple(report['executed_steps'])==planned,'GRAPH_INCOMPLETE_STEPS')
-        report.update(passed=True,original_file_id=original_id,actual_added_node_ids=actual_added,all_selected_node_ids=ids,actual_edge_id=edge,
+        report.update(passed=True,original_file_id=original_id,actual_added_node_ids=actual_added,all_selected_node_ids=ids,
+            actual_edge_id=None if remaining else edge,selected_connection_id=edge,
             duplicate_mapping=duplicate_map,paste_mapping=paste_map,seed_extension_fixture_is_synthetic=True,
             original_PID=int(original_pid),fixture_open_PID=int(open_pid),before_cold_PID=int(before_cold_pid),cold_PID=int(cold_pid),final_sha256=digest(deleted))
     except Exception as error:
