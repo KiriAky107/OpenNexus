@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       check_scope:
-        description: 'Run all checks, or only the standalone Sync transport and Android TLS checks'
+        description: 'Run all checks, standalone Sync transport, or affected Windows record replacement checks'
         type: choice
-        options: [all, sync-http]
+        options: [all, sync-http, windows-records]
         default: all
         required: false
 
@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   docs:
-    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -41,7 +41,7 @@ jobs:
       - run: python3 scripts/test_prepare_experiment_runtime.py
 
   backend:
-    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -65,7 +65,7 @@ jobs:
       - run: uv run --frozen pytest
 
   frontend:
-    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -89,7 +89,7 @@ jobs:
       - run: pnpm build
 
   rust:
-    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     defaults:
@@ -137,7 +137,7 @@ jobs:
           if-no-files-found: error
 
   windows-host:
-    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all'
     runs-on: windows-2022
     timeout-minutes: 60
     env:
@@ -279,7 +279,98 @@ jobs:
             .build/experiment-runtime/signatures.json
           if-no-files-found: warn
 
+  windows-records:
+    if: github.event_name == 'workflow_dispatch' && inputs.check_scope == 'windows-records'
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+      CARGO_BUILD_JOBS: '2'
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            frontend/src-tauri/target
+          key: windows-host-msvc-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('frontend/src-tauri/Cargo.lock', 'frontend/src-tauri/Cargo.toml') }}-${{ github.sha }}
+          restore-keys: |
+            windows-host-msvc-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('frontend/src-tauri/Cargo.lock', 'frontend/src-tauri/Cargo.toml') }}-
+            windows-host-msvc-${{ steps.rust.outputs.cachekey }}-
+      - run: cargo fmt --check
+      - name: Verify the original retained reader fails the Windows regression
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib, json, os, subprocess
+          source = Path('src/records.rs')
+          original = source.read_bytes()
+          scoped = '\n'.join([
+              '            let bytes = {',
+              '                let mut file = std::fs::File::open(self.resolve(&path)?)?;',
+              '                crate::payloads::read_record_checked(&mut file, 1024 * 1024, &|| guard.check())?',
+              '            };'])
+          retained = '\n'.join([
+              '            let mut file = std::fs::File::open(self.resolve(&path)?)?;',
+              '            let bytes =',
+              '                crate::payloads::read_record_checked(&mut file, 1024 * 1024, &|| guard.check())?;'])
+          text = original.decode('utf-8').replace('\r\n', '\n')
+          assert text.count(scoped) == 1, 'Exact record read hunk changed'
+          evidence = Path('../../.build/windows-records')
+          evidence.mkdir(parents=True, exist_ok=False)
+          name = 'records::tests::sync_record_normalization_releases_original_reader_before_acceptance'
+          try:
+              source.write_bytes(text.replace(scoped, retained).encode('utf-8'))
+              result = subprocess.run(['cargo', 'test', '--lib', '--locked', name,
+                  '--', '--exact', '--nocapture'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              (evidence / 'original-reader.log').write_bytes(result.stdout)
+          finally:
+              source.write_bytes(original)
+          assert source.read_bytes() == original
+          output = result.stdout.decode('utf-8', errors='replace')
+          assert result.returncode != 0, 'Retained reader unexpectedly passed'
+          assert 'record reader must be closed before accepting replacement' in output, output[-12000:]
+          assert 'test result: FAILED. 0 passed; 1 failed;' in output, output[-12000:]
+          (evidence / 'original-reader.json').write_text(json.dumps({
+              'checkout_sha': os.environ['GITHUB_SHA'],
+              'source_sha256': hashlib.sha256(original).hexdigest(),
+              'test': name, 'original_retained_reader_rejected': True,
+              'source_restored_exactly': True}), encoding='utf-8')
+      - name: Test fixed normalization, refusal and record schema preservation
+        shell: python
+        run: |
+          from pathlib import Path
+          import json, os, subprocess, sys
+          evidence = Path('../../.build/windows-records')
+          result = subprocess.run(['cargo', 'test', '--lib', '--locked', 'records::tests::',
+              '--', '--nocapture'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+          (evidence / 'fixed-records.log').write_bytes(result.stdout)
+          print(result.stdout.decode('utf-8', errors='replace'))
+          (evidence / 'fixed-records.json').write_text(json.dumps({
+              'checkout_sha': os.environ['GITHUB_SHA'],
+              'exit_code': result.returncode,
+              'passed': result.returncode == 0}), encoding='utf-8')
+          sys.exit(result.returncode)
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-record-reader-${{ github.sha }}
+          path: .build/windows-records
+          if-no-files-found: warn
+
   sync-http:
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'windows-records'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -312,6 +403,7 @@ jobs:
         run: cargo clippy --lib --no-default-features --features sync-http --locked -- -D warnings
 
   sync-http-android:
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'windows-records'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:

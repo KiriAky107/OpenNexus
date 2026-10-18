@@ -229,9 +229,10 @@ impl Workspace {
             .filter(|v| v.starts_with("opennexus-records/v1/tasks/") && allowed(v))
         {
             guard.check()?;
-            let mut file = std::fs::File::open(self.resolve(&path)?)?;
-            let bytes =
-                crate::payloads::read_record_checked(&mut file, 1024 * 1024, &|| guard.check())?;
+            let bytes = {
+                let mut file = std::fs::File::open(self.resolve(&path)?)?;
+                crate::payloads::read_record_checked(&mut file, 1024 * 1024, &|| guard.check())?
+            };
             let original = validate(&path, &bytes)?;
             guard.check()?;
             if let Some(note_id) = original.data["note_id"].as_str() {
@@ -368,6 +369,69 @@ mod tests {
     use super::*;
     fn fixture() -> Value {
         json!({"schema":1,"kind":"task","id":"task_00000000000000000000000000000001","data":{"title":"Task","description":"","status":"todo","note_id":null,"due_at_ms":null,"created_at_ms":0,"updated_at_ms":0}})
+    }
+    #[cfg(windows)]
+    #[test]
+    fn sync_record_normalization_releases_original_reader_before_acceptance() {
+        use crate::workspace_commit::CommitGuard;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        struct ReaderReleased {
+            path: std::path::PathBuf,
+            commits: std::cell::Cell<usize>,
+        }
+        impl CommitGuard for ReaderReleased {
+            fn check(&self) -> Result<()> {
+                Ok(())
+            }
+            fn commit(&self, transaction: rusqlite::Transaction<'_>) -> Result<()> {
+                let exclusive = std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(0)
+                    .open(&self.path)
+                    .expect("record reader must be closed before accepting replacement");
+                drop(exclusive);
+                transaction.commit()?;
+                self.commits.set(self.commits.get() + 1);
+                Ok(())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let note = ws
+            .write("original.md", "", b"original note", "local")
+            .unwrap();
+        ws.db
+            .execute(
+                "INSERT INTO file_aliases VALUES ('former_note',?1)",
+                [&note.file_id],
+            )
+            .unwrap();
+        let mut record = fixture();
+        record["data"]["note_id"] = json!("former_note");
+        let path = path(record["id"].as_str().unwrap()).unwrap();
+        let bytes = serde_json::to_vec(&record).unwrap();
+        let original = ws.write(&path, "", &bytes, "local").unwrap();
+        let guard = ReaderReleased {
+            path: root.path().join(&path),
+            commits: std::cell::Cell::new(0),
+        };
+        // Confirm this check detects the old reader lifetime on real Windows.
+        let held = std::fs::File::open(&guard.path).unwrap();
+        assert!(std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&guard.path)
+            .is_err());
+        drop(held);
+        ws.normalize_record_links_checked(&guard).unwrap();
+        assert_eq!(guard.commits.get(), 1);
+        record["data"]["note_id"] = json!(note.file_id);
+        let current: Value = serde_json::from_slice(&std::fs::read(&guard.path).unwrap()).unwrap();
+        assert_eq!(current, record);
+        let entry = ws.entry(&path).unwrap().unwrap();
+        assert_eq!(entry.file_id, original.file_id);
+        assert_eq!(entry.revision, original.revision + 1);
     }
     #[test]
     fn sync_record_normalization_refusal_keeps_original_link_and_acceptance_uses_one_new_journal() {
