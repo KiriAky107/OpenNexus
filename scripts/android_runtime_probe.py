@@ -400,7 +400,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -877,7 +877,7 @@ class Probe:
             if getattr(getattr(self,'args',None),'scope',None) in ('canvas-graph','canvas-graph-remaining'):
                 from android_canvas_graph_probe import PATH
                 owned_names = (PATH,)
-            if getattr(getattr(self,'args',None),'scope',None) == 'document-limits':
+            if getattr(getattr(self,'args',None),'scope',None) in ('document-limits','document-export'):
                 from android_document_limits_probe import SEED_PATH, CASES
                 owned_names = (SEED_PATH, *(path for _, path, _, _ in CASES))
             if getattr(getattr(self,'args',None),'scope',None) == 'note-search':
@@ -1197,7 +1197,7 @@ class Probe:
 
     def run(self):
         self.boot()
-        if self.args.scope=='document-limits':
+        if self.args.scope in ('document-limits','document-export'):
             from android_document_limits_probe import run_document_limits
             run_document_limits(self)
             return
@@ -1347,7 +1347,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

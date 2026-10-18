@@ -33,6 +33,11 @@ STEPS = ('limits-seed', 'limits-list', *(case[0] for case in CASES), 'limits-col
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 
+def document_steps(scope):
+    require(type(scope) is str and scope in ('document-limits', 'document-export'), 'LIMITS_EXPLICIT_SCOPE')
+    return ('limits-seed', 'limits-list', 'export') if scope == 'document-export' else STEPS
+
+
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -104,7 +109,7 @@ def readonly_result(before, after, originals, opened):
 
 
 def snapshot(probe, phase):
-    require(probe.args.scope == 'document-limits' and phase.removesuffix('-failure') in STEPS,
+    require(phase.removesuffix('-failure') in document_steps(probe.args.scope),
         'LIMITS_OWN_SNAPSHOT_SCOPE')
     paths = [SEED_PATH, *(path for _, path, _, _ in CASES)]
     marks = ','.join('?' for _ in paths)
@@ -141,19 +146,22 @@ def snapshot(probe, phase):
 
 def run_document_limits(probe):
     require_hosted_emulator(probe.args.serial)
-    require(probe.args.scope == 'document-limits', 'LIMITS_EXPLICIT_SCOPE')
+    planned = document_steps(probe.args.scope)
+    export_only = probe.args.scope == 'document-export'
     report = {'passed': False, 'run_id': os.environ['GITHUB_RUN_ID'], 'tools_source': probe.args.tools_commit,
         'compiled_source': probe.args.commit, 'APK_sha256': probe.binding['sha256'],
-        'scope': 'Native Markdown1MiB/Canvas4MiB boundaries, original read-only drafts and real SAF content export',
+        'scope': 'Only remaining real SAF export of declared original files' if export_only else
+            'Native Markdown1MiB/Canvas4MiB boundaries, original read-only drafts and real SAF content export',
+        'boundary_open_refusal_GUI_not_replayed': export_only,
         'synthetic_files_declared_not_GUI_imported': True, 'physical_upgrade_or_whole_A2_A3C_complete': False,
         'executed_steps': []}
     current = None
     originals = {SEED_PATH: SEED, **{path: fixture(path, size) for _, path, size, _ in CASES}}
     def phase(name, cold=False):
         nonlocal current
-        require(name == STEPS[len(report['executed_steps'])], 'LIMITS_ORIGINAL_PHASE_ORDER')
+        require(name == planned[len(report['executed_steps'])], 'LIMITS_ORIGINAL_PHASE_ORDER')
         current = name
-        atomic_json(probe.output / (name + '-original-intent.json'), {'step': name, 'scope': 'document-limits',
+        atomic_json(probe.output / (name + '-original-intent.json'), {'step': name, 'scope': probe.args.scope,
             'run_id': os.environ['GITHUB_RUN_ID'], 'tools_source': probe.args.tools_commit,
             'compiled_source': probe.args.commit, 'automatic_retry': False}, exclusive=True)
         probe.phase(name, continue_process=not cold, keep_running=True)
@@ -181,17 +189,19 @@ def run_document_limits(probe):
         require(probe.shell('pidof', APP).stdout.strip() != before_pid, 'LIMITS_DECLARED_FIXTURE_REOPEN_NOT_COLD')
         opened = set()
         readonly_result(baseline, baseline, originals, opened)
-        for step, path, _, allowed in CASES:
-            after = phase(step)
-            if allowed:
-                opened.add(path)
+        old, new = before_pid, probe.shell('pidof', APP).stdout.strip()
+        if not export_only:
+            for step, path, _, allowed in CASES:
+                after = phase(step)
+                if allowed:
+                    opened.add(path)
+                readonly_result(baseline, after, originals, opened)
+            old = probe.shell('pidof', APP).stdout.strip()
+            after = phase('limits-cold', cold=True)
+            new = probe.shell('pidof', APP).stdout.strip()
             readonly_result(baseline, after, originals, opened)
-        old = probe.shell('pidof', APP).stdout.strip()
-        after = phase('limits-cold', cold=True)
-        new = probe.shell('pidof', APP).stdout.strip()
         require(re.fullmatch(rb'[1-9][0-9]{0,9}', old) and re.fullmatch(rb'[1-9][0-9]{0,9}', new) and old != new,
             'LIMITS_FINAL_PROCESS_NOT_NEW')
-        readonly_result(baseline, after, originals, opened)
         exported = phase('export')
         readonly_result(baseline, exported, originals, opened)
         delivery = probe.verify_export(originals)
@@ -199,19 +209,22 @@ def run_document_limits(probe):
         for path, body in originals.items():
             require(probe.private(probe.root + 'vault/' + path).stdout == body, 'LIMITS_READ_OR_EXPORT_REWROTE_FILE')
         report.update(passed=True, actual_seed_file_id=seed['files'][0]['id'], actual_native_file_ids={x['path']: x['id'] for x in baseline['files']},
-            cases=[{'path': path, 'bytes': size, 'native_opened': allowed, 'sha256': digest(originals[path])} for _, path, size, allowed in CASES],
-            rejected_paths_have_no_drafts_or_save_intents=True, unknown_Canvas_extensions_and_original_CRLF_unchanged=True,
+            cases=[] if export_only else [{'path': path, 'bytes': size, 'native_opened': allowed, 'sha256': digest(originals[path])} for _, path, size, allowed in CASES],
+            actual_boundary_GUI_tested=not export_only, declared_files_have_no_new_save_intents=True,
+            unknown_Canvas_extensions_and_original_CRLF_unchanged=True,
             cold_original_PID=int(old), cold_new_PID=int(new), system_destination=delivery,
             export_is_content_not_private_DB_history_or_credentials=True)
+        if not export_only:
+            report['rejected_paths_have_no_drafts_or_save_intents'] = True
     except Exception as error:
         report['failure_class'] = type(error).__name__
         report['phase'] = current
-        if probe.root is not None and current in STEPS:
+        if probe.root is not None and current in planned:
             try:
                 snapshot(probe, current + '-failure')
             except Exception as observation:
                 report['failure_observation_class'] = type(observation).__name__
         raise
     finally:
-        atomic_json(probe.output / 'document-limits-proof.json', report, exclusive=True)
+        atomic_json(probe.output / ('document-export-proof.json' if export_only else 'document-limits-proof.json'), report, exclusive=True)
         probe.force_stop()

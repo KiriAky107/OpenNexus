@@ -6,16 +6,66 @@ import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+import subprocess
 import unittest
 import zipfile
 from unittest.mock import patch, Mock
 import yaml
-from android_document_limits_probe import CASES, MIB, NODE, SEED, SEED_PATH, fixture, exported_originals, readonly_result, run_document_limits
+from android_document_limits_probe import CASES, MIB, NODE, SEED, SEED_PATH, STEPS, document_steps, fixture, exported_originals, readonly_result, run_document_limits
 from android_runtime_probe import Probe
 from test_android_desktop_workflow import admitted
 
 
 class NativeDocumentLimits(unittest.TestCase):
+    def test_export_only_never_selects_passed_boundary_opens_or_refusals(self):
+        self.assertEqual(document_steps('document-export'), ('limits-seed', 'limits-list', 'export'))
+        self.assertEqual(document_steps('document-limits'), STEPS)
+        for step, _, _, _ in CASES:
+            self.assertNotIn(step, document_steps('document-export'))
+        self.assertNotIn('limits-cold', document_steps('document-export'))
+        for scope in ('all', 'canvas-remaining', None, True):
+            with self.assertRaises(RuntimeError):document_steps(scope)
+
+    def test_export_scope_dispatches_runner_and_preserves_unopened_drafts_and_ledger(self):
+        probe = Probe.__new__(Probe);probe.args=SimpleNamespace(scope='document-export');probe.boot=Mock()
+        with patch('android_document_limits_probe.run_document_limits') as run:probe.run()
+        probe.boot.assert_called_once_with();run.assert_called_once_with(probe)
+        originals, before = self.setup_rows()
+        readonly_result(before, copy.deepcopy(before), originals, set())
+        opened = self.accepted(before, originals, {CASES[0][1]})
+        with self.assertRaises(RuntimeError):readonly_result(before, opened, originals, set())
+
+    def test_export_only_runs_fresh_seed_list_and_system_export_without_replaying_boundary_actions(self):
+        originals, baseline = self.setup_rows()
+        seed = copy.deepcopy(baseline);seed['files'] = seed['files'][:1]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            bundle = io.BytesIO()
+            with zipfile.ZipFile(bundle, 'w') as archive:
+                for path, body in originals.items():archive.writestr('vault/' + path, body)
+                archive.writestr('OpenNexus-export.json', json.dumps(dict(format='opennexus-content-export', schema=1,
+                    scope='markdown-canvas-images', files=[dict(path='vault/' + path, size=len(body),
+                    sha256=hashlib.sha256(body).hexdigest()) for path, body in originals.items()])))
+            (output/'system-saved-content.zip').write_bytes(bundle.getvalue())
+            probe = SimpleNamespace(args=SimpleNamespace(scope='document-export', serial='emulator-5562',
+                commit='a'*40, tools_commit='b'*40), output=output, root='./', binding={'sha256':'c'*64},
+                phase=Mock(), enable_test_ime=Mock(), original=Mock(return_value=SEED), device=Mock(),
+                private=Mock(side_effect=lambda path:subprocess.CompletedProcess([], 0, originals[path.removeprefix('./vault/')], b'')),
+                shell=Mock(side_effect=[subprocess.CompletedProcess([],0,value,b'') for value in (b'100',b'200',b'200')]),
+                verify_export=Mock(return_value={'state':'saved'}), force_stop=Mock())
+            with patch.dict(os.environ, {'GITHUB_RUN_ID':'123'}), patch('android_document_limits_probe.require_hosted_emulator'), \
+                    patch('android_document_limits_probe.fixture', side_effect=lambda path,size:originals[path]), \
+                    patch('android_document_limits_probe.snapshot', side_effect=[seed,baseline,copy.deepcopy(baseline)]):
+                run_document_limits(probe)
+            self.assertEqual([call.args[0] for call in probe.phase.call_args_list], ['limits-seed','limits-list','export'])
+            self.assertEqual(probe.device.call_count, len(CASES))
+            probe.verify_export.assert_called_once_with(originals)
+            probe.force_stop.assert_called_once_with()
+            report=json.loads((output/'document-export-proof.json').read_text('utf-8'))
+            self.assertTrue(report['passed']);self.assertTrue(report['boundary_open_refusal_GUI_not_replayed'])
+            self.assertFalse(report['actual_boundary_GUI_tested']);self.assertEqual(report['cases'],[])
+            self.assertNotIn('rejected_paths_have_no_drafts_or_save_intents',report)
+
     def test_actual_boundary_data_is_valid_UTF8_JSON_with_original_extensions_and_duplicate_CRLF_headings(self):
         for _, path, size, allowed in CASES:
             body = fixture(path, size)
@@ -87,12 +137,13 @@ class NativeDocumentLimits(unittest.TestCase):
 
     def test_scope_reuses_one_fixed_APK_without_other_client_builds(self):
         workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/android.yml').read_text('utf-8'), Loader=yaml.BaseLoader)
-        self.assertIn('document-limits', workflow['on']['workflow_dispatch']['inputs']['runtime_scope']['options'])
-        for reuse in ('', '39112675356'):
-            self.assertFalse(admitted(workflow['jobs']['debug-apk']['if'], 'document-limits', reuse=reuse))
-        self.assertTrue(admitted(workflow['jobs']['emulator-runtime']['if'], 'document-limits', reuse='39112675356', build='skipped'))
-        self.assertFalse(admitted(workflow['jobs']['emulator-runtime']['if'], 'document-limits', reuse='', build='skipped'))
-        self.assertFalse(admitted(workflow['jobs']['desktop-startup']['if'], 'document-limits'))
+        for scope in ('document-limits', 'document-export'):
+            self.assertIn(scope, workflow['on']['workflow_dispatch']['inputs']['runtime_scope']['options'])
+            for reuse in ('', '39112675356'):
+                self.assertFalse(admitted(workflow['jobs']['debug-apk']['if'], scope, reuse=reuse))
+            self.assertTrue(admitted(workflow['jobs']['emulator-runtime']['if'], scope, reuse='39112675356', build='skipped'))
+            self.assertFalse(admitted(workflow['jobs']['emulator-runtime']['if'], scope, reuse='', build='skipped'))
+            self.assertFalse(admitted(workflow['jobs']['desktop-startup']['if'], scope))
 
     def test_content_export_requires_exact_original_bytes_manifest_and_no_additional_private_file(self):
         originals={'original.md':b'# original\r\n','original.canvas':b'{"nodes":[],"edges":[],"vendor":true}\r\n'}

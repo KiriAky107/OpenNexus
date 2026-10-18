@@ -10,7 +10,7 @@ class OfflinePendingWorkflow(unittest.TestCase):
         self.workflow=yaml.load((Path(__file__).resolve().parents[1]/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
         self.job=self.workflow['jobs']['emulator-runtime']
     def test_batch_can_only_reuse_fixed_APK_and_excludes_all_desktop_jobs(self):
-        for scope in ('offline-pending','offline-pending-final','offline-limits'):
+        for scope in ('offline-pending','offline-pending-final','offline-limits','content-transfer'):
             self.assertIn(scope,self.workflow['on']['workflow_dispatch']['inputs']['runtime_scope']['options'])
             for reuse in ('','39078195102'):
                 self.assertFalse(admitted(self.workflow['jobs']['debug-apk']['if'],scope,reuse=reuse))
@@ -28,13 +28,16 @@ class OfflinePendingWorkflow(unittest.TestCase):
         self.assertIn('["note-search","canvas-file-delete"]',scene)
         self.assertIn("inputs.runtime_scope == 'offline-limits'",scene)
         self.assertIn('["document-limits","write-interruption"]',scene)
+        self.assertIn("inputs.runtime_scope == 'content-transfer'",scene)
+        self.assertIn('["canvas-remaining","document-export"]',scene)
         self.assertIn(chr(91)+chr(34)+chr(34)+chr(93),scene)
         self.assertEqual(self.job['env']['OWNED_RUNTIME_SCOPE'],"${{ matrix.scene || inputs.runtime_scope || 'all' }}")
     def test_effective_matrix_selects_only_the_requested_new_scenes(self):
         expression=self.job['strategy']['matrix']['scene'].removeprefix('${{ fromJSON(').removesuffix(') }}')
         for scope,expected in [('offline-pending',['note-search','file-actions-remaining']),
                 ('offline-pending-final',['note-search','canvas-file-delete']),
-                ('offline-limits',['document-limits','write-interruption']),('canvas-graph-remaining',[''])]:
+                ('offline-limits',['document-limits','write-interruption']),
+                ('content-transfer',['canvas-remaining','document-export']),('canvas-graph-remaining',[''])]:
             source=expression.replace('inputs.runtime_scope',repr(scope)).replace('&&',' and ').replace('||',' or ')
             tree=ast.parse(source,mode='eval')
             self.assertTrue(all(isinstance(n,(ast.Expression,ast.BoolOp,ast.Compare,ast.Constant,ast.And,ast.Or,ast.Eq)) for n in ast.walk(tree)))
