@@ -20,6 +20,15 @@ public final class OriginalCanvasGraphCheck {
         check(!OriginalCanvasGraph.field("Node content",OriginalCanvasGraph.TEXT,false));
         check(!OriginalCanvasGraph.field("Other",OriginalCanvasGraph.TEXT,true));
         check(!OriginalCanvasGraph.field("Connection label","x".repeat(4097),true));
+        check(OriginalCanvasGraph.actionDecision(1,0,-1,0)==1);
+        check(OriginalCanvasGraph.actionDecision(0,1,-1,0)==0);
+        check(OriginalCanvasGraph.actionDecision(0,1,-1,3)==2);
+        check(OriginalCanvasGraph.actionDecision(0,1,1,3)==0);
+        check(OriginalCanvasGraph.actionDecision(0,0,-1,3)==0);
+        check(OriginalCanvasGraph.actionDecision(0,1,0,3)==2);
+        check(OriginalCanvasGraph.actionDecision(1,1,1,0)==1);
+        try { OriginalCanvasGraph.actionDecision(2,1,0,0);throw new AssertionError(); } catch(IllegalArgumentException expected){checks++;}
+        try { OriginalCanvasGraph.actionDecision(0,1,0,33);throw new AssertionError(); } catch(IllegalArgumentException expected){checks++;}
         System.out.println("ORIGINAL_CANVAS_GRAPH_DATA_OK "+checks);
         java.util.List<String> values=new java.util.ArrayList<>(java.util.List.of(OriginalCanvasGraph.PATH,OriginalCanvasGraph.SEED_A,
             OriginalCanvasGraph.SEED_B,OriginalCanvasGraph.TEXT,OriginalCanvasGraph.GROUP,OriginalCanvasGraph.FILE,OriginalCanvasGraph.URL,OriginalCanvasGraph.EDGE));

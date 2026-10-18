@@ -14,6 +14,13 @@ final class OriginalCanvasGraph {
         for(String step:STEPS)if(("graph-"+step).equals(value))return true;
         return false;
     }
+    // 0: read again; 1: activate the exact visible action; 2: open once.
+    static int actionDecision(int actions,int triggers,int expanded,int stableAbsent) {
+        if(actions<0||actions>1||triggers<0||triggers>1||expanded< -1||expanded>1||stableAbsent<0||stableAbsent>32)
+            throw new IllegalArgumentException("OWNED_GRAPH_OBSERVATION_REFUSED");
+        if(actions==1)return 1;
+        return triggers==1&&expanded!=1&&stableAbsent>=3?2:0;
+    }
     static boolean field(String name,String observed,boolean named) {
         if(name==null||observed==null||observed.length()>4096)return false;
         if(name.equals("Node content")||name.equals("Connection label"))return named;

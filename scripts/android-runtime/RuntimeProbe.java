@@ -806,11 +806,35 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void graphAction(String name) {
-        showCanvasTools();
-        AccessibilityNodeInfo target=waitNode(node->APP.equals(string(node.getPackageName()))
-            && node.isClickable()&&!node.isEditable()&&node.isEnabled()&&label(node,name,false)
-            && within(node,"Canvas operations"),"original graph toolbar action: "+name);
-        activate(target,value->within(value,"Canvas operations"));
+        settleUi();long until=SystemClock.uptimeMillis()+25_000;
+        int absent=0;boolean opened=false,shown=false;
+        do {
+            List<AccessibilityNodeInfo> actions=new ArrayList<>(),triggers=new ArrayList<>();
+            for(AccessibilityNodeInfo node:nodes())if(APP.equals(string(node.getPackageName()))&&node.isClickable()
+                &&!node.isEditable()&&node.isEnabled()) {
+                if(label(node,name,false)&&within(node,"Canvas operations"))actions.add(node);
+                if(node.isVisibleToUser()&&"android.widget.Button".equals(string(node.getClassName()))&&label(node,"Canvas tools",false))triggers.add(node);
+            }
+            require(actions.size()<=1&&triggers.size()<=1,"Ambiguous original graph action; no input sent");
+            int visible=actions.size()==1&&actions.get(0).isVisibleToUser()?1:0,expanded=-1;
+            if(triggers.size()==1&&Build.VERSION.SDK_INT>=36) {
+                int state=triggers.get(0).getExpandedState();
+                if(state==AccessibilityNodeInfo.EXPANDED_STATE_FULL||state==AccessibilityNodeInfo.EXPANDED_STATE_PARTIAL)expanded=1;
+                else if(state==AccessibilityNodeInfo.EXPANDED_STATE_COLLAPSED)expanded=0;
+            }
+            absent=visible==0&&triggers.size()==1&&expanded!=1&&(actions.isEmpty()||expanded==0)?Math.min(absent+1,32):0;
+            int decision=OriginalCanvasGraph.actionDecision(visible,triggers.size(),expanded,absent);
+            progress.append("ORIGINAL_GRAPH_CONTROL actions=").append(visible).append(" triggers=").append(triggers.size())
+                .append(" expanded=").append(expanded).append(" stable_absent=").append(absent).append('\n');
+            if(decision==1) { activate(actions.get(0),value->within(value,"Canvas operations"));return; }
+            if(!shown&&actions.size()==1&&!actions.get(0).isVisibleToUser()&&expanded!=0) {
+                shown=true;require(actions.get(0).performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),"Original graph action could not be shown");
+            } else if(decision==2&&!opened) {
+                opened=true;activate(triggers.get(0));absent=0;
+            }
+            SystemClock.sleep(150);
+        }while(SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Original graph action not visible; no action retried");
     }
 
     private AccessibilityNodeInfo graphField(String name) {
@@ -872,10 +896,7 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void graphMenu(String action) {
-        clickMenu("More canvas actions");
-        AccessibilityNodeInfo target=waitNode(node->APP.equals(string(node.getPackageName()))&&node.isClickable()
-            &&node.isEnabled()&&!node.isEditable()&&label(node,action,false)&&within(node,"Canvas operations"),"original graph menu: "+action);
-        activate(target,value->within(value,"Canvas operations"));
+        graphAction("More canvas actions");graphAction(action);
     }
 
     private void graphInspectorAction(String name) {

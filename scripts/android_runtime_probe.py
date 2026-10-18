@@ -379,7 +379,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -459,7 +459,7 @@ class Probe:
                         'cc.kronecker.opennexus.testdriver.OriginalCanvasPropertyCheck']).stdout
                     (self.output / 'driver-original-canvas-property.txt').write_bytes(observed)
                     require(observed.startswith(b'ORIGINAL_CANVAS_PROPERTY_OK '), 'Original Canvas property admission failed')
-                if getattr(self.args, 'scope', '') == 'canvas-graph':
+                if getattr(self.args, 'scope', '') in ('canvas-graph','canvas-graph-remaining'):
                     self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,
                         '-d', checks, root.parent / 'android-runtime-tests/OriginalCanvasGraphCheck.java'])
                     observed = self.command(['java', '-Xmx64m', '-cp', str(classes) + os.pathsep + str(checks),
@@ -467,7 +467,7 @@ class Probe:
                     (self.output / 'driver-original-canvas-graph.txt').write_bytes(observed)
                     from android_canvas_graph_probe import PATH, SEED_A, SEED_B, TEXT, GROUP, FILE, URL, EDGE, STEPS
                     lines = observed.decode('ascii', 'strict').splitlines()
-                    require(len(lines) == 2 and lines[0] == 'ORIGINAL_CANVAS_GRAPH_DATA_OK 46'
+                    require(len(lines) == 2 and lines[0] == 'ORIGINAL_CANVAS_GRAPH_DATA_OK 55'
                         and lines[1].split() == [digest(x.encode()) for x in (PATH, SEED_A, SEED_B, TEXT, GROUP, FILE, URL, EDGE, *STEPS)],
                         'Original Canvas graph driver fixture data differs')
                 if getattr(self.args, 'scope', '') == 'note-search':
@@ -813,7 +813,7 @@ class Probe:
                 owned_names = ('runtime-long.md',)
             if getattr(getattr(self,'args',None),'scope',None) == 'storage-recovery':
                 owned_names = ('full-area/original.md',)
-            if getattr(getattr(self,'args',None),'scope',None) == 'canvas-graph':
+            if getattr(getattr(self,'args',None),'scope',None) in ('canvas-graph','canvas-graph-remaining'):
                 from android_canvas_graph_probe import PATH
                 owned_names = (PATH,)
             if getattr(getattr(self,'args',None),'scope',None) == 'note-search':
@@ -1133,7 +1133,7 @@ class Probe:
 
     def run(self):
         self.boot()
-        if self.args.scope == 'canvas-graph':
+        if self.args.scope in ('canvas-graph','canvas-graph-remaining'):
             from android_canvas_graph_probe import run_canvas_graph
             run_canvas_graph(self)
             return
@@ -1275,7 +1275,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

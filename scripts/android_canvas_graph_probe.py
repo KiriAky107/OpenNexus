@@ -28,10 +28,24 @@ STEPS=tuple('graph-'+x for x in ('seed','open','add-text','add-file','add-link',
 READ_ONLY={'graph-open','graph-copy','graph-fit','graph-cold'}
 UUID=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
+def graph_steps(remaining):
+    require(type(remaining) is bool,'GRAPH_EXPLICIT_SELECTION')
+    return tuple(x for x in STEPS if not remaining or x not in ('graph-add-text','graph-add-file','graph-add-link'))
+
+def initial_fixture(remaining):
+    require(type(remaining) is bool,'GRAPH_EXPLICIT_FIXTURE_SELECTION')
+    if not remaining:return FIXTURE,{}
+    value=graph(FIXTURE);ids={}
+    for kind,content,xy,ending in [('text',TEXT,(0,120),'304'),('file',FILE,(150,120),'305'),('link',URL,(0,240),'306')]:
+        identity='f58f7b80-8bf1-42da-a619-f1e08c70c'+ending;ids[kind]=identity
+        value['nodes'].append(dict(id=identity,type=kind,x=xy[0],y=xy[1],width=120,height=100,
+            **{{'text':'text','file':'file','link':'url'}[kind]:content},vendor={'synthetic_fixture_only':True}))
+    return encoded(value),ids
+
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 
 def snapshot(probe,label):
-    require(probe.args.scope=='canvas-graph' and label.removesuffix('-failure') in STEPS,'GRAPH_SNAPSHOT_SCOPE')
+    require(probe.args.scope in ('canvas-graph','canvas-graph-remaining') and label.removesuffix('-failure') in graph_steps(probe.args.scope=='canvas-graph-remaining'),'GRAPH_SNAPSHOT_SCOPE')
     value={}
     for key,table,columns in [('drafts','drafts','id,file_id,path,base_hash,generation,saved_generation,content,edit_session'),
         ('saves','save_intents','operation_id,draft_id,generation,file_id,path,expected,content,state,error')]:
@@ -89,16 +103,18 @@ def saved_original(before,after,raw):
     return {'file_id':entry['id'],'operation_id':operation,'fingerprint':receipts[0]['fingerprint'],'sha256':digest(raw)}
 
 def run_canvas_graph(probe):
-    require_hosted_emulator(probe.args.serial);require(probe.args.scope=='canvas-graph','GRAPH_EXPLICIT_SCOPE')
+    require_hosted_emulator(probe.args.serial);require(probe.args.scope in ('canvas-graph','canvas-graph-remaining'),'GRAPH_EXPLICIT_SCOPE')
+    remaining=probe.args.scope=='canvas-graph-remaining';planned=graph_steps(remaining);fixture,fixture_ids=initial_fixture(remaining)
     report={'passed':False,'run_id':os.environ['GITHUB_RUN_ID'],'tools_source':probe.args.tools_commit,
-        'compiled_source':probe.args.commit,'APK_sha256':probe.binding['sha256'],'scope':'canvas-graph',
+        'compiled_source':probe.args.commit,'APK_sha256':probe.binding['sha256'],'scope':probe.args.scope,
+        'three_type_GUI_additions_and_composition_not_replayed':remaining,'synthetic_fixture_three_type_ids':fixture_ids,
         'physical_phone_touch_geometry_midwrite_or_whole_A3C_complete':False,'executed_steps':[],'saves':[]}
     current=None
     def phase(name):
         nonlocal current
-        require(name==STEPS[len(report['executed_steps'])],'GRAPH_ORIGINAL_STEP_ORDER');current=name;report['phase']=name
+        require(name==planned[len(report['executed_steps'])],'GRAPH_ORIGINAL_STEP_ORDER');current=name;report['phase']=name
         atomic_json(probe.output/(name+'-original-intent.json'),{'run_id':os.environ['GITHUB_RUN_ID'],
-            'tools_source':probe.args.tools_commit,'compiled_source':probe.args.commit,'scope':'canvas-graph','step':name,
+            'tools_source':probe.args.tools_commit,'compiled_source':probe.args.commit,'scope':probe.args.scope,'step':name,
             'owned_path':PATH,'automatic_retry':False,'native_operation_ID_assigned_by_driver':False},exclusive=True)
         probe.phase(name,continue_process=name not in ('graph-seed','graph-open','graph-cold'),keep_running=True)
         value=snapshot(probe,name);raw=probe.original(PATH);graph(raw)
@@ -110,22 +126,24 @@ def run_canvas_graph(probe):
         report['saves'].append(saved_original(None,before,raw));original_id=before['files'][0]['id']
         original_pid=probe.shell('pidof',APP).stdout.strip();require(re.fullmatch(rb'[1-9][0-9]{0,9}',original_pid),'GRAPH_ORIGINAL_PID')
         atomic_json(probe.output/'graph-extension-fixture-original-intent.json',{'before_sha256':digest(raw),
-            'after_sha256':digest(FIXTURE),'owned_path':PATH,'synthetic_seed_nodes_and_edge_declared':True,
+            'after_sha256':digest(fixture),'owned_path':PATH,'synthetic_seed_nodes_and_edge_declared':True,
             'actual_GUI_creations_or_unknown_user_file_not_claimed':True,'automatic_retry':False},exclusive=True)
-        probe.device('shell','-T',shlex.join(('run-as',APP,'sh','-c','cat > '+shlex.quote(probe.root+'vault/'+PATH))),input=FIXTURE)
-        require(probe.original(PATH)==FIXTURE,'GRAPH_OWN_FIXTURE_BYTES')
-        before,raw=phase('graph-open');identical_original_bytes(FIXTURE,raw)
+        probe.device('shell','-T',shlex.join(('run-as',APP,'sh','-c','cat > '+shlex.quote(probe.root+'vault/'+PATH))),input=fixture)
+        require(probe.original(PATH)==fixture,'GRAPH_OWN_FIXTURE_BYTES')
+        before,raw=phase('graph-open');identical_original_bytes(fixture,raw)
         open_pid=probe.shell('pidof',APP).stdout.strip()
         require(re.fullmatch(rb'[1-9][0-9]{0,9}',open_pid) and open_pid!=original_pid,'GRAPH_FIXTURE_COLD_NEW_PID')
         require(before['files'][0]['id']==original_id and before['saves'][0]['operation_id']==report['saves'][0]['operation_id'],'GRAPH_COLD_FIXTURE_LOST_CREATION')
-        ids={}
+        ids=dict(fixture_ids);actual_added={}
         for kind,content,position in [('text',TEXT,(0,120)),('file',FILE,(150,120)),('link',URL,(0,240)),('group',GROUP,(350,0))]:
+            if remaining and kind!='group':continue
             after,new=phase('graph-add-'+kind);identity=added_node(raw,new,kind,content)
             node=next(x for x in graph(new)['nodes'] if x['id']==identity)
             require(tuple(node[k] for k in ('x','y','width','height'))==(*position,120,100),'GRAPH_ACTUAL_PROPERTIES')
-            ids[kind]=identity;report['saves'].append(saved_original(before,after,new));before,raw=after,new
-        require((probe.output/'graph-add-text.log').read_text('utf-8').count(
-            'ORIGINAL_GRAPH_IME compose=2 confirm=1 save_during_composition=0')==1,'GRAPH_ACTUAL_COMPOSITION_MARKER')
+            ids[kind]=identity;actual_added[kind]=identity;report['saves'].append(saved_original(before,after,new));before,raw=after,new
+        if not remaining:
+            require((probe.output/'graph-add-text.log').read_text('utf-8').count(
+                'ORIGINAL_GRAPH_IME compose=2 confirm=1 save_during_composition=0')==1,'GRAPH_ACTUAL_COMPOSITION_MARKER')
         after,new=phase('graph-connect');edge=added_edge(raw,new,ids['link'],ids['file'])
         report['saves'].append(saved_original(before,after,new));before,raw=after,new
         after,new=phase('graph-edge-label');edited_edge(raw,new,edge,{'label':EDGE})
@@ -156,8 +174,8 @@ def run_canvas_graph(probe):
         cold_pid=probe.shell('pidof',APP).stdout.strip()
         require(re.fullmatch(rb'[1-9][0-9]{0,9}',before_cold_pid) and re.fullmatch(rb'[1-9][0-9]{0,9}',cold_pid)
             and cold_pid!=before_cold_pid,'GRAPH_ACTUAL_NEW_PID')
-        require(tuple(report['executed_steps'])==STEPS,'GRAPH_INCOMPLETE_STEPS')
-        report.update(passed=True,original_file_id=original_id,actual_added_node_ids=ids,actual_edge_id=edge,
+        require(tuple(report['executed_steps'])==planned,'GRAPH_INCOMPLETE_STEPS')
+        report.update(passed=True,original_file_id=original_id,actual_added_node_ids=actual_added,all_selected_node_ids=ids,actual_edge_id=edge,
             duplicate_mapping=duplicate_map,paste_mapping=paste_map,seed_extension_fixture_is_synthetic=True,
             original_PID=int(original_pid),fixture_open_PID=int(open_pid),before_cold_PID=int(before_cold_pid),cold_PID=int(cold_pid),final_sha256=digest(deleted))
     except Exception as error:

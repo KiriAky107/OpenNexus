@@ -7,9 +7,32 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from android_canvas_graph_probe import (PATH,FIXTURE,STEPS,A,B,E,graph,saved_original,projection,run_canvas_graph)
+from android_canvas_graph_probe import (PATH,FIXTURE,STEPS,A,B,E,graph,saved_original,projection,run_canvas_graph,graph_steps,initial_fixture,TEXT,FILE,URL)
 
 class GraphNativeSave(unittest.TestCase):
+    def test_remaining_scope_selects_same_graph_controller_without_old_UI_calls(self):
+        from android_runtime_probe import Probe
+        from unittest.mock import Mock
+        for scope in ('canvas-graph','canvas-graph-remaining'):
+            probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope);probe.boot=Mock()
+            with patch('android_canvas_graph_probe.run_canvas_graph') as run:probe.run()
+            probe.boot.assert_called_once_with();run.assert_called_once_with(probe)
+    def test_remaining_plan_preserves_all_unpassed_actions_but_skips_three_passed_additions(self):
+        remaining=graph_steps(True);self.assertEqual(len(remaining),16)
+        self.assertEqual(remaining,tuple(x for x in STEPS if x not in ('graph-add-text','graph-add-file','graph-add-link')))
+        self.assertEqual(graph_steps(False),STEPS)
+        for invalid in (1,'true',None):
+            with self.assertRaises(RuntimeError):graph_steps(invalid)
+    def test_remaining_fixture_marks_three_types_as_synthetic_and_keeps_original_extensions(self):
+        raw,ids=initial_fixture(True);value=graph(raw);base=graph(FIXTURE)
+        self.assertEqual(value['nodes'][:2],base['nodes']);self.assertEqual(value['edges'],base['edges'])
+        self.assertEqual(value['vendor-root'],base['vendor-root']);self.assertEqual(set(ids),{'text','file','link'})
+        self.assertEqual(len(set(ids.values())|{A,B}),5)
+        for kind,key,content in [('text','text',TEXT),('file','file',FILE),('link','url',URL)]:
+            node=next(n for n in value['nodes'] if n['id']==ids[kind]);self.assertEqual(node[key],content)
+            self.assertTrue(node['vendor']['synthetic_fixture_only'])
+        self.assertEqual(initial_fixture(False),(FIXTURE,{}))
+        with self.assertRaises(RuntimeError):initial_fixture(1)
     def setUp(self):
         self.raw=FIXTURE;self.file='d58f7b80-8bf1-42da-a619-f1e08c70c301';self.op='e58f7b80-8bf1-42da-a619-f1e08c70c301'
         sha=hashlib.sha256(self.raw).hexdigest()
