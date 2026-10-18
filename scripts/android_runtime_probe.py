@@ -400,7 +400,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -500,6 +500,17 @@ class Probe:
                     from android_atomic_probe import NOTE,ORIGINAL,UPDATED
                     require(observed.decode('ascii').splitlines()==['ORIGINAL_ATOMIC_WRITE_DATA_OK',digest(NOTE.encode()),digest(ORIGINAL),digest(UPDATED)],
                         'Original atomic write driver bytes differ')
+                if getattr(self.args,'scope','')=='canvas-motion':
+                    self.command(['javac','-J-Xmx256m','-encoding','UTF-8','-classpath',classes,
+                        '-d',checks,root.parent/'android-runtime-tests/OriginalCanvasMotionCheck.java'])
+                    observed=self.command(['java','-Xmx64m','-cp',str(classes)+os.pathsep+str(checks),
+                        'cc.kronecker.opennexus.testdriver.OriginalCanvasMotionCheck']).stdout
+                    (self.output/'driver-original-canvas-motion.txt').write_bytes(observed)
+                    from android_canvas_motion_probe import PATH,NODE,OTHER,EDGE,STEPS
+                    lines=observed.decode('ascii').splitlines()
+                    require(len(lines)==2 and lines[0]=='ORIGINAL_CANVAS_MOTION_DATA_OK 39'
+                        and lines[1].split()==[digest(value.encode()) for value in (PATH,NODE,OTHER,EDGE,*STEPS)],
+                        'Original Canvas motion driver data differs')
                 if getattr(self.args, 'scope', '') == 'note-search':
                     self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,
                         '-d', checks, root.parent / 'android-runtime-tests/OriginalNoteSearchCheck.java'])
@@ -637,6 +648,10 @@ class Probe:
         self.native_tls_startup(phase)
         if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
             result = self.image_save_instrumentation(phase)
+        elif getattr(getattr(self,'args',None),'scope','')=='canvas-motion' and phase=='motion-background':
+            require(re.fullmatch(re.escape(APP)+r'/[A-Za-z0-9_.]+',self.activity),'Original motion resume activity refused')
+            result=self.shell('am','instrument','-w','-e','phase',phase,'-e','motion_activity',self.activity,
+                f'{DRIVER}/.RuntimeProbe',timeout=180)
         else:
             result = self.shell('am', 'instrument', '-w', '-e', 'phase', phase, f'{DRIVER}/.RuntimeProbe', timeout=180)
         text = result.stdout.decode('utf-8', 'replace')
@@ -876,6 +891,9 @@ class Probe:
                 owned_names = ('full-area/original.md',)
             if getattr(getattr(self,'args',None),'scope',None) in ('canvas-graph','canvas-graph-remaining'):
                 from android_canvas_graph_probe import PATH
+                owned_names = (PATH,)
+            if getattr(getattr(self,'args',None),'scope',None) == 'canvas-motion':
+                from android_canvas_motion_probe import PATH
                 owned_names = (PATH,)
             if getattr(getattr(self,'args',None),'scope',None) in ('document-limits','document-export'):
                 from android_document_limits_probe import SEED_PATH, CASES
@@ -1197,6 +1215,10 @@ class Probe:
 
     def run(self):
         self.boot()
+        if self.args.scope=='canvas-motion':
+            from android_canvas_motion_probe import run_canvas_motion
+            run_canvas_motion(self)
+            return
         if self.args.scope in ('document-limits','document-export'):
             from android_document_limits_probe import run_document_limits
             run_document_limits(self)
@@ -1347,7 +1369,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

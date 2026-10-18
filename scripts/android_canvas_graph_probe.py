@@ -78,11 +78,11 @@ def snapshot(probe,label):
 
 def projection(value):return {key:value[key] for key in ('saves','files','outbox','operations')}
 
-def saved_original(before,after,raw):
+def saved_original(before,after,raw,*,path=PATH):
     """Only one actual new Save, bound to its unchanged original operation and file."""
     require(len(after['files'])==len(after['drafts'])==1,'GRAPH_SAVE_SINGLE_FILE')
     entry,draft=after['files'][0],after['drafts'][0]
-    require(re.fullmatch(UUID,entry['id']) and entry['path']==PATH and entry['hash']==digest(raw) and entry['deleted']==0,
+    require(re.fullmatch(UUID,entry['id']) and entry['path']==path and entry['hash']==digest(raw) and entry['deleted']==0,
         'GRAPH_SAVE_NATIVE_FILE')
     require(draft['file_id']==entry['id'] and draft['content'].encode()==raw and draft['generation']==draft['saved_generation'],
         'GRAPH_SAVE_DRAFT_NOT_ORIGINAL')
@@ -90,14 +90,14 @@ def saved_original(before,after,raw):
     require(len(after['saves'])==len(old)+1 and after['saves'][:len(old)]==old,'GRAPH_SAVE_ORIGINAL_INTENT_REPLACED')
     intent=after['saves'][-1];operation=intent['operation_id']
     require(re.fullmatch(UUID,operation) and intent['state']=='committed' and intent['error'] is None
-        and intent['path']==PATH and intent['content'].encode()==raw and intent['file_id'] in (None,entry['id']),
+        and intent['path']==path and intent['content'].encode()==raw and intent['file_id'] in (None,entry['id']),
         'GRAPH_SAVE_INTENT_CONTENT')
     receipts=[x for x in after['operations'] if x['operation_id']==operation]
     outbox=[x for x in after['outbox'] if x['operation_id']==operation]
     require(len(receipts)==len(outbox)==1 and receipts[0]['state']=='committed'
         and re.fullmatch(r'[0-9a-f]{64}',receipts[0]['fingerprint']),'GRAPH_SAVE_ORIGINAL_RECEIPT')
     result=json.loads(receipts[0]['result']);pending=outbox[0]
-    require(result['file_id']==pending['file_id']==entry['id'] and result['path']==pending['path']==PATH
+    require(result['file_id']==pending['file_id']==entry['id'] and result['path']==pending['path']==path
         and result['hash']==pending['hash']==digest(raw) and result['deleted'] is False
         and result['revision']==pending['revision']==entry['revision'] and pending['operation']=='put','GRAPH_SAVE_ORIGINAL_RESULT')
     if before:

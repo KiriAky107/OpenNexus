@@ -19,6 +19,10 @@ import java.util.List;
 import java.util.function.Predicate;
 import java.io.File;
 import java.io.FileOutputStream;
+import android.content.ComponentName;
+import android.content.Intent;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /** Separate test app drives the installed APK through Android accessibility and real touch events. */
 public final class RuntimeProbe extends Instrumentation {
@@ -50,6 +54,10 @@ public final class RuntimeProbe extends Instrumentation {
             CompositionIme.attach(getContext());
             String phase = arguments.getString("phase", "");
             switch (phase) {
+                case "motion-seed": case "motion-open": case "motion-move": case "motion-resize":
+                case "motion-pan": case "motion-pinch": case "motion-cancel": case "motion-takeover":
+                case "motion-background": case "motion-cold": case "motion-inspector":
+                    originalCanvasMotion(phase); break;
                 case "files-md-seed":
                 case "files-md-seed-renamed":
                 case "files-md-rename-old":
@@ -1108,6 +1116,150 @@ public final class RuntimeProbe extends Instrumentation {
         }
         if(save)save();
         progress.append("ORIGINAL_CANVAS_GRAPH_STEP ").append(step).append(" save=").append(save?1:0).append('\n');
+    }
+
+    private Predicate<AccessibilityNodeInfo> motionTarget() {
+        return node->APP.equals(string(node.getPackageName()))&&!node.isEditable()
+            &&label(node,"text: "+OriginalCanvasMotion.NODE,false)&&within(node,"Free canvas");
+    }
+    private int[][] motionObservation() {
+        int[][] previous=null,current=null;int stable=0;
+        for(int frame=0;frame<24&&stable<3;frame++) {
+            current=graphHitObservation(motionTarget());
+            stable=java.util.Arrays.deepEquals(previous,current)?stable+1:0;previous=current;SystemClock.sleep(32);
+        }
+        require(stable>=3,"Original motion geometry did not settle; no gesture input sent");
+        return current;
+    }
+    private int[][] motionObstacles(int[] clip) {
+        List<int[]> boxes=new ArrayList<>();
+        for(AccessibilityNodeInfo node:nodes()) {
+            if(!APP.equals(string(node.getPackageName()))||!node.isVisibleToUser()||!node.isEnabled())continue;
+            boolean world=label(node,"text: "+OriginalCanvasMotion.NODE,false)||label(node,"link: example.invalid",false)
+                ||label(node,"Connection: "+OriginalCanvasMotion.EDGE,false);
+            boolean control="android.widget.Button".equals(string(node.getClassName()))||node.isEditable()||node.isCheckable()
+                ||node.isLongClickable()||node.isClickable()&&"android.view.View".equals(string(node.getClassName()))
+                &&!label(node,"Free canvas",false);
+            if(!world&&!control)continue;
+            Rect bounds=new Rect();node.getBoundsInScreen(bounds);
+            if(bounds.isEmpty()||bounds.right<=clip[0]||bounds.left>=clip[2]||bounds.bottom<=clip[1]||bounds.top>=clip[3])continue;
+            require(boxes.size()<32,"Original motion obstacle bound exceeded; no gesture input sent");
+            boxes.add(new int[]{bounds.left,bounds.top,bounds.right,bounds.bottom});
+        }
+        require(boxes.size()>=2,"Original motion world obstacles are missing");
+        return boxes.toArray(new int[boxes.size()][]);
+    }
+    private JSONArray motionRows(int[][] values)throws Exception {
+        JSONArray result=new JSONArray();for(int[] value:values)result.put(new JSONArray(value));return result;
+    }
+    private void motionRecord(String phase,String kind,JSONObject value)throws Exception {
+        require(OriginalCanvasMotion.phase(phase)&&(kind.equals("intent")||kind.equals("result")),"Original motion record scope refused");
+        File file=new File(getContext().getFilesDir(),phase+"-touch-"+kind+".json");
+        require(file.createNewFile(),"Original motion record already exists; no action replayed");
+        byte[] raw=(value.toString()+"\n").getBytes("UTF-8");require(raw.length<=16384,"Original motion record bound exceeded");
+        try(FileOutputStream output=new FileOutputStream(file)){output.write(raw);output.getFD().sync();}
+        progress.append("ORIGINAL_CANVAS_MOTION_RECORD ").append(phase).append(' ').append(kind).append('\n');
+    }
+    private void motionInput(long start,int action,float[][] points,int[] clip,JSONArray events)throws Exception {
+        require(points.length>=1&&points.length<=2,"Original motion pointer bound refused");
+        MotionEvent.PointerProperties[] ids=new MotionEvent.PointerProperties[points.length];
+        MotionEvent.PointerCoords[] coordinates=new MotionEvent.PointerCoords[points.length];
+        for(int i=0;i<points.length;i++) {
+            require(points[i].length==2&&OriginalCanvasMotion.contains(clip,points[i][0],points[i][1],0),"Original motion pointer outside owned viewport");
+            ids[i]=new MotionEvent.PointerProperties();ids[i].id=i;ids[i].toolType=MotionEvent.TOOL_TYPE_FINGER;
+            coordinates[i]=new MotionEvent.PointerCoords();coordinates[i].x=points[i][0];coordinates[i].y=points[i][1];
+            coordinates[i].pressure=(action&MotionEvent.ACTION_MASK)==MotionEvent.ACTION_UP||(action&MotionEvent.ACTION_MASK)==MotionEvent.ACTION_CANCEL
+                ||(action&MotionEvent.ACTION_MASK)==MotionEvent.ACTION_POINTER_UP&&i==1?0:1;coordinates[i].size=1;
+        }
+        long now=SystemClock.uptimeMillis();MotionEvent event=MotionEvent.obtain(start,now,action,points.length,ids,coordinates,0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);
+        try {
+            require(ui.injectInputEvent(event,true),"Original finger event rejected; no input retry");
+            JSONArray pointerIds=new JSONArray(),tools=new JSONArray(),observed=new JSONArray();
+            for(int i=0;i<event.getPointerCount();i++) {pointerIds.put(event.getPointerId(i));tools.put(event.getToolType(i));observed.put(new JSONArray(new float[]{event.getX(i),event.getY(i)}));}
+            events.put(new JSONObject().put("action",event.getActionMasked()).put("index",event.getActionIndex())
+                .put("source",event.getSource()).put("ids",pointerIds).put("tools",tools).put("points",observed)
+                .put("down_ms",event.getDownTime()).put("time_ms",event.getEventTime()));
+        } finally {event.recycle();}
+    }
+    private void motionMoves(long start,float[] plan,int[] clip,JSONArray events)throws Exception {
+        for(int step=1;step<=8;step++) {
+            SystemClock.sleep(35);float x=plan[0]+(plan[2]-plan[0])*step/8f,y=plan[1]+(plan[3]-plan[1])*step/8f;
+            motionInput(start,MotionEvent.ACTION_MOVE,new float[][]{{x,y}},clip,events);
+        }
+    }
+    private boolean motionHomeAndResume(ComponentName original)throws Exception {
+        AccessibilityNodeInfo active=ui.getRootInActiveWindow();require(active!=null&&APP.equals(string(active.getPackageName())),"Original app not foreground before Home");
+        long time=SystemClock.uptimeMillis();
+        for(int action:new int[]{KeyEvent.ACTION_DOWN,KeyEvent.ACTION_UP})require(ui.injectInputEvent(new KeyEvent(time,SystemClock.uptimeMillis(),action,KeyEvent.KEYCODE_HOME,0),true),"Original Home key rejected");
+        long until=SystemClock.uptimeMillis()+10000;boolean background=false;
+        do {
+            active=ui.getRootInActiveWindow();String owner=active==null?"":string(active.getPackageName());
+            if(owner.equals("com.android.launcher3")||owner.equals("com.google.android.apps.nexuslauncher")){background=true;break;}
+            SystemClock.sleep(100);
+        }while(SystemClock.uptimeMillis()<until);
+        require(background,"Actual original Home surface was not observed; no gesture completion sent");
+        // The original pointer stream is left to Android's actual window-loss cancellation.
+        // No artificial ACTION_CANCEL/UP or touch is sent to the home application.
+        SystemClock.sleep(500);getContext().startActivity(new Intent().setComponent(original).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP));
+        waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"text: "+OriginalCanvasMotion.NODE,false)&&within(node,"Free canvas"),"same owned graph after actual Home and resume");
+        return background;
+    }
+    private void originalCanvasMotion(String phase)throws Exception {
+        require(OriginalCanvasMotion.phase(phase),"Original motion phase refused");String step=phase.substring(7);
+        if(step.equals("seed")){create("New canvas",OriginalCanvasMotion.PATH);save();return;}
+        if(step.equals("open")||step.equals("cold")){open(OriginalCanvasMotion.PATH);waitLabel("Free canvas");waitNode(motionTarget(),"original declared motion node");return;}
+        graphClosePanel();graphAction("Show all");graphNode("text: "+OriginalCanvasMotion.NODE);settleUi();
+        if(step.equals("inspector")){graphAction("Properties");waitNode(node->within(node,"Canvas nodes and connections")&&label(node,"Node properties",true),"original node inspector, read only");return;}
+        int[][] observation=motionObservation();int[] bounds=observation[0],clip=observation[1];int[][] controls=java.util.Arrays.copyOfRange(observation,2,observation.length);
+        int[][] obstacles=motionObstacles(clip);int[] resize=null;float[] plan;
+        if(step.equals("resize")) {
+            AccessibilityNodeInfo control=uniqueTarget(node->APP.equals(string(node.getPackageName()))&&node.isClickable()
+                &&label(node,"Resize node",false)&&within(node,"text: "+OriginalCanvasMotion.NODE)&&within(node,"Free canvas"));
+            Rect box=new Rect();control.getBoundsInScreen(box);resize=new int[]{box.left,box.top,box.right,box.bottom};
+        }
+        if(step.equals("pan"))plan=OriginalCanvasMotion.pan(clip,obstacles);
+        else if(step.equals("pinch"))plan=OriginalCanvasMotion.emptyPair(clip,obstacles);
+        else plan=OriginalCanvasMotion.drag(bounds,clip,controls,resize);
+        JSONObject intent=new JSONObject().put("schema",1).put("scope","canvas-motion").put("phase",phase).put("owner",APP)
+            .put("node_bounds",new JSONArray(bounds)).put("clip",new JSONArray(clip)).put("controls",motionRows(controls))
+            .put("obstacles",motionRows(obstacles)).put("plan",new JSONArray(plan)).put("recorded_ms",SystemClock.uptimeMillis());
+        if(resize!=null)intent.put("resize_control",new JSONArray(resize));
+        float[] secondary=null;ComponentName resume=null;
+        if(step.equals("takeover")) {
+            int[][] swept=java.util.Arrays.copyOf(obstacles,obstacles.length+1);swept[obstacles.length]=new int[]{bounds[0],bounds[1],(int)Math.ceil(bounds[2]+plan[2]-plan[0]),(int)Math.ceil(bounds[3]+plan[3]-plan[1])};
+            float[] empty=OriginalCanvasMotion.emptyPair(clip,swept);float x=empty[2],y=empty[3];
+            require(Math.hypot(x-plan[2],y-plan[3])>=80,"Original second finger separation refused");
+            secondary=new float[]{x,y,plan[2]+(x-plan[2])*1.1f,plan[3]+(y-plan[3])*1.1f};
+            require(OriginalCanvasMotion.contains(clip,secondary[2],secondary[3],12),"Original second finger end outside viewport");
+            intent.put("secondary",new JSONArray(secondary));
+        }
+        if(step.equals("background")) {
+            String activity=arguments.getString("motion_activity","");resume=ComponentName.unflattenFromString(activity);
+            require(activity.length()<=300&&resume!=null&&APP.equals(resume.getPackageName()),"Original resume activity is not the owned installed app");intent.put("resume_activity",activity);
+        }
+        motionRecord(phase,"intent",intent);JSONArray events=new JSONArray();long start=SystemClock.uptimeMillis();
+        motionInput(start,MotionEvent.ACTION_DOWN,new float[][]{{plan[0],plan[1]}},clip,events);
+        boolean background=false,resumed=false;
+        if(step.equals("pinch")||step.equals("takeover")) {
+            float x1=plan[0],y1=plan[1],x2=plan[2],y2=plan[3],end1x=x1,end1y=y1,end2x=x2,end2y=y2;
+            if(step.equals("takeover")){motionMoves(start,plan,clip,events);x1=plan[2];y1=plan[3];x2=secondary[0];y2=secondary[1];end1x=x1;end1y=y1;end2x=secondary[2];end2y=secondary[3];}
+            else {float center=(x1+x2)/2;end1x=center+(x1-center)*1.1f;end2x=center+(x2-center)*1.1f;}
+            motionInput(start,MotionEvent.ACTION_POINTER_DOWN|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),new float[][]{{x1,y1},{x2,y2}},clip,events);
+            for(int frame=1;frame<=8;frame++){SystemClock.sleep(35);motionInput(start,MotionEvent.ACTION_MOVE,new float[][]{{x1+(end1x-x1)*frame/8f,y1+(end1y-y1)*frame/8f},{x2+(end2x-x2)*frame/8f,y2+(end2y-y2)*frame/8f}},clip,events);}
+            motionInput(start,MotionEvent.ACTION_POINTER_UP|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),new float[][]{{end1x,end1y},{end2x,end2y}},clip,events);
+            float lastX=end1x+8,lastY=end1y+8;require(OriginalCanvasMotion.contains(clip,lastX,lastY,4),"Original remaining finger end refused");
+            motionInput(start,MotionEvent.ACTION_MOVE,new float[][]{{lastX,lastY}},clip,events);motionInput(start,MotionEvent.ACTION_UP,new float[][]{{lastX,lastY}},clip,events);
+        } else {
+            motionMoves(start,plan,clip,events);
+            if(step.equals("background")){background=motionHomeAndResume(resume);resumed=true;}
+            else motionInput(start,step.equals("cancel")?MotionEvent.ACTION_CANCEL:MotionEvent.ACTION_UP,new float[][]{{plan[2],plan[3]}},clip,events);
+        }
+        settleUi();int[] after=motionObservation()[0];AccessibilityNodeInfo active=ui.getRootInActiveWindow();
+        motionRecord(phase,"result",new JSONObject().put("schema",1).put("phase",phase).put("owner",APP)
+            .put("before_node_bounds",new JSONArray(bounds)).put("after_node_bounds",new JSONArray(after)).put("events",events)
+            .put("background_seen",background).put("resumed_owned",resumed).put("owned_root_after",active!=null&&APP.equals(string(active.getPackageName()))));
+        if(step.equals("move")||step.equals("resize"))save();
+        else waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"Save",false)&&!node.isEnabled(),"view-only/interrupted gesture keeps Save disabled");
     }
 
     private void pairProperty(String name, String before, String after) {
