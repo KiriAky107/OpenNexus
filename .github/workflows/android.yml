@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, storage-recovery, file-actions, file-actions-remaining, note-search, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, desktop-pair, build-only]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, storage-recovery, file-actions, file-actions-remaining, note-search, offline-pending, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, desktop-pair, build-only]
         default: all
         required: false
       sync_cold_originals:
@@ -115,7 +115,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -190,11 +190,20 @@ jobs:
           if-no-files-found: error
 
   emulator-runtime:
+    name: ${{ matrix.scene && format('emulator-runtime ({0})', matrix.scene) || 'emulator-runtime' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        # Independent still-pending offline scenes get separate fresh hosted runners.
+        # Every existing single-scope run keeps its original job and artifact names.
+        scene: ${{ fromJSON(inputs.runtime_scope == 'offline-pending' && '["note-search","file-actions-remaining"]' || '[""]') }}
     needs: debug-apk
     if: ${{ always() && !cancelled() && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair' && inputs.runtime_scope != 'build-only' && (needs.debug-apk.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.apk_run_id != '')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
+      OWNED_RUNTIME_SCOPE: ${{ matrix.scene || inputs.runtime_scope || 'all' }}
       COMPILED_SHA: ${{ inputs.apk_commit || github.sha }}
       APK_BUILD_RUN_ID: ${{ inputs.apk_run_id || github.run_id }}
       ANDROID_AVD_HOME: ${{ github.workspace }}/.build/android-runtime/avd
@@ -205,7 +214,7 @@ jobs:
         env:
           REUSE_RUN: ${{ inputs.apk_run_id }}
           REUSE_COMMIT: ${{ inputs.apk_commit }}
-          RUNTIME_SCOPE: ${{ inputs.runtime_scope || 'all' }}
+          RUNTIME_SCOPE: ${{ env.OWNED_RUNTIME_SCOPE }}
           ORIGINAL_NATIVE_OUTCOME: ${{ inputs.sync_original_native_outcome }}
           COLD_ORIGINALS: ${{ inputs.sync_cold_originals }}
           WEBVIEW_PREVIEW: ${{ inputs.sync_webview_preview }}
@@ -306,16 +315,16 @@ jobs:
           "$ANDROID_HOME/emulator/emulator" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-runtime/emulator.log 2>&1 &
           echo "$!" > .build/android-runtime/emulator.pid
       - name: Check long-note measurement boundaries without starting a client
-        if: inputs.runtime_scope == 'performance'
+        if: env.OWNED_RUNTIME_SCOPE == 'performance'
         run: python3 -m unittest discover -s scripts -p test_android_performance_probe.py -v
       - name: Check bounded filesystem ownership and original recovery invariants
-        if: inputs.runtime_scope == 'storage-recovery'
+        if: env.OWNED_RUNTIME_SCOPE == 'storage-recovery'
         run: python3 -m unittest discover -s scripts -p test_android_storage_probe.py -v
       - name: Check bounded original nested-note search invariants
-        if: inputs.runtime_scope == 'note-search'
+        if: env.OWNED_RUNTIME_SCOPE == 'note-search'
         run: python3 -m unittest discover -s scripts -p test_android_note_search_probe.py -v
       - name: Check original local file review and receipt invariants
-        if: inputs.runtime_scope == 'file-actions' || inputs.runtime_scope == 'file-actions-remaining'
+        if: env.OWNED_RUNTIME_SCOPE == 'file-actions' || env.OWNED_RUNTIME_SCOPE == 'file-actions-remaining'
         run: python3 -m unittest discover -s scripts -p test_android_file_actions_probe.py -v
       - name: Check real APK editing, force-stop recovery, Canvas touch and system export
         if: inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts'
@@ -325,7 +334,7 @@ jobs:
           python3 scripts/android_runtime_probe.py --commit "$COMPILED_SHA"
           --source-checkout .build/android-runtime/compiled-source --tools-commit "$GITHUB_SHA"
           --build-run-id "$APK_BUILD_RUN_ID"
-          --scope "${{ inputs.runtime_scope || 'all' }}"
+          --scope "${{ env.OWNED_RUNTIME_SCOPE }}"
           --bundle .build/android-runtime/package --sdk "$ANDROID_HOME"
           --output .build/android-runtime/evidence
       - name: Check actual native HTTPS sign-in, cold resume and original auth outcomes
@@ -385,7 +394,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts'
         with:
-          name: OpenNexus-android-runtime-${{ env.COMPILED_SHA }}
+          name: ${{ matrix.scene && format('OpenNexus-android-runtime-{0}-{1}', matrix.scene, env.COMPILED_SHA) || format('OpenNexus-android-runtime-{0}', env.COMPILED_SHA) }}
           path: |
             .build/android-runtime/evidence/
             .build/android-runtime/emulator.log

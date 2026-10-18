@@ -12,6 +12,6 @@ class NoteSearchWorkflow(unittest.TestCase):
         self.assertTrue(admitted(workflow['jobs']['emulator-runtime']['if'],'note-search',reuse='39078195102',build='skipped'))
         self.assertFalse(admitted(workflow['jobs']['emulator-runtime']['if'],'note-search',reuse='',build='skipped'))
         steps=workflow['jobs']['emulator-runtime']['steps']
-        self.assertTrue(any(step.get('if')=="inputs.runtime_scope == 'note-search'" and 'test_android_note_search_probe.py' in step.get('run','') for step in steps))
+        self.assertTrue(any(step.get('if')=="env.OWNED_RUNTIME_SCOPE == 'note-search'" and 'test_android_note_search_probe.py' in step.get('run','') for step in steps))
 
 if __name__=='__main__':unittest.main()
