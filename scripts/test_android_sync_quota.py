@@ -33,6 +33,8 @@ class QuotaContract(unittest.TestCase):
         proof=validate_quota_rejection(before,after,provider,remote,DEVICE,raw,raw)
         self.assertEqual(proof['actual_failed_attempt_operation_id'],OP)
         self.assertTrue(proof['actual_original_pending_job_and_payload_retained'])
+        self.assertTrue(proof['original_pending_job_and_payload_retained'])
+        self.assertFalse(proof['unchanged_native_boundary'])
         self.assertEqual(proof['preserved_archived_operation_ids'],[OLD])
 
     def test_loss_ack_replacement_duplicate_attempt_or_wrong_issuer_is_rejected(self):

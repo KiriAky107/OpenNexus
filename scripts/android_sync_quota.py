@@ -43,7 +43,9 @@ def validate_quota_rejection(before,after,provider,remote,device,original,observ
     require(len(expected_remote['delivery']['events'])<=64 and remote==expected_remote,
         'Actual quota413 is absent or original provider content/reservations were changed')
     return dict(preserved,actual_failed_attempt_operation_id=operation,actual_service_quota=QUOTA,
-        actual_original_pending_job_and_payload_retained=True,generated_empty_page_is_not_client_ACK=True)
+        original_pending_job_and_payload_retained=True,unchanged_native_boundary=False,
+        initial_no_job_boundary_validated=True,actual_original_pending_job_and_payload_retained=True,
+        generated_empty_page_is_not_client_ACK=True)
 
 
 def run_quota(probe,setup,prepared,device):
