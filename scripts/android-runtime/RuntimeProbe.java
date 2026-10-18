@@ -131,6 +131,10 @@ public final class RuntimeProbe extends Instrumentation {
                 case "reference-unsupported":
                 case "reference-cold":
                     originalLocalReference(phase); break;
+                case "external-md-seed": case "external-canvas-seed": case "external-baseline":
+                case "external-draft": case "external-cancel": case "external-md-open":
+                case "external-canvas-open": case "external-cold":
+                    originalExternalReference(phase);break;
                 case "candidate-locale-seed": create("New canvas",CANVAS);save();break;
                 case "candidate-locale-open": open(CANVAS);waitLabel("Free canvas");break;
                 case "candidate-language-en": case "candidate-language-zh":
@@ -727,6 +731,78 @@ public final class RuntimeProbe extends Instrumentation {
             default:throw new IllegalStateException("Unreviewed local reference phase");
         }
         progress.append("ORIGINAL_LOCAL_REFERENCE ").append(phase).append(" save=").append(phase.endsWith("-seed")?1:0).append('\n');
+    }
+
+    private JSONObject originalExternalForm() throws Exception {
+        File file=new File(getContext().getFilesDir(),"owned-external-form.json");
+        require(file.isFile()&&file.length()>0&&file.length()<=8192,"Bounded original external form missing");
+        byte[] raw=java.nio.file.Files.readAllBytes(file.toPath());JSONObject form=new JSONObject(new String(raw,java.nio.charset.StandardCharsets.UTF_8));
+        require(form.length()==8&&form.getInt("schema")==1&&form.getString("scope").equals("external-links")
+            &&form.getString("source_md").equals("external-source.md")&&form.getString("source_canvas").equals("external-source.canvas")
+            &&form.getString("markdown_uri").equals(OriginalExternalUri.MD)&&form.getString("canvas_uri").equals(OriginalExternalUri.CANVAS),
+            "Foreign or reinterpreted external form");
+        for(String name:new String[]{"source_body","draft_body"})require(form.getString(name).length()>0&&form.getString(name).length()<=4096,"Unbounded original external text");
+        StringBuilder hash=new StringBuilder();for(byte value:java.security.MessageDigest.getInstance("SHA-256").digest(raw))hash.append(String.format(java.util.Locale.ROOT,"%02x",value&255));
+        progress.append("ORIGINAL_EXTERNAL_FORM_SHA256 ").append(hash).append('\n');return form;
+    }
+
+    private void externalAbsent() {
+        for(String key:new String[]{"markdown","canvas"})require(!new File(getContext().getFilesDir(),"owned-external-"+key+".received.json").exists(),"Unexpected external intent before explicit Open");
+        require(!new File(getContext().getFilesDir(),"owned-external-receiver-error.json").exists(),"Unexpected external receiver failure");
+    }
+
+    private void externalReceived(String key) throws Exception {
+        File root=getContext().getFilesDir(),record=new File(root,"owned-external-"+key+".received.json");
+        long until=SystemClock.uptimeMillis()+10000;
+        while(!record.exists()) {
+            require(!new File(root,"owned-external-receiver-error.json").exists(),"Owned external receiver refused original intent");
+            require(SystemClock.uptimeMillis()<until,"Original external intent receipt missing; Open must not be retried");SystemClock.sleep(100);
+        }
+        require(record.isFile()&&record.length()>0&&record.length()<=8192,"Unbounded external receipt");
+        JSONObject value=new JSONObject(new String(java.nio.file.Files.readAllBytes(record.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+        File armed=new File(root,"owned-external-"+key+".armed.json");
+        require(armed.isFile()&&armed.length()>0&&armed.length()<=4096,"Original external intent missing");
+        JSONObject original=new JSONObject(new String(java.nio.file.Files.readAllBytes(armed.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+        require(value.length()==11&&value.getInt("schema")==1&&value.getString("scope").equals("external-links")
+            &&value.getString("key").equals(key)&&value.getString("operation_id").equals(original.getString("operation_id"))
+            &&value.getString("original_uri").equals(OriginalExternalUri.original(key))
+            &&OriginalExternalUri.key(value.getString("actual_action"),value.getString("actual_data_uri"),value.getBoolean("actual_browsable")).equals(key)
+            &&value.getString("receiver_package").equals(getContext().getPackageName())&&!value.getBoolean("browser_or_network_or_physical_verified"),
+            "External receipt does not match original reviewed Open");
+        progress.append("ORIGINAL_EXTERNAL_RECEIVED ").append(key).append(" operation=").append(original.getString("operation_id")).append('\n');
+    }
+
+    private void originalExternalReference(String phase) throws Exception {
+        JSONObject form=originalExternalForm();String source=form.getString("source_md");
+        switch(phase) {
+            case "external-md-seed":create("New note",source);inputText(noteBody(),form.getString("source_body"));save();break;
+            case "external-canvas-seed":create("New canvas",form.getString("source_canvas"));save();break;
+            case "external-baseline":
+                externalAbsent();open(form.getString("source_canvas"));waitLabel("Free canvas");open(source);
+                waitNode(node->editorContainsOriginalMarkdown(node,form.optString("source_body")),"saved original external link text");break;
+            case "external-draft":inputText(noteBody(),form.getString("draft_body"));waitLabel("Draft kept on this device");break;
+            case "external-cancel":
+                externalAbsent();referencePreviewLink("Owned external Markdown");referenceReview(OriginalExternalUri.MD,true);
+                referenceDialogAction("Close");referenceTitle(source);externalAbsent();break;
+            case "external-md-open":
+                externalAbsent();
+                Predicate<AccessibilityNodeInfo> link=node->APP.equals(string(node.getPackageName()))&&node.isEnabled()&&node.isClickable()
+                    &&label(node,"Owned external Markdown",false)&&within(node,"Read preview");
+                activate(waitNode(link,"original external preview link after cancel"),link);referenceReview(OriginalExternalUri.MD,true);
+                referenceDialogAction("Open");externalReceived("markdown");referenceTitle(source);break;
+            case "external-canvas-open":
+                open(form.getString("source_canvas"));waitLabel("Free canvas");graphAction("Show all");
+                graphNode("link: "+OriginalExternalUri.HOST);graphAction("Properties");
+                require(propertyValue(propertyControl("Node content"),"Node content",OriginalExternalUri.CANVAS),"Original uppercase Canvas URI was changed");
+                AccessibilityNodeInfo review=propertyControl("Review file or link");
+                activate(review,node->propertyVisible(node,"Canvas nodes and connections")&&within(node,"Canvas nodes and connections"));
+                referenceReview(OriginalExternalUri.CANVAS,true);referenceDialogAction("Open");externalReceived("canvas");referenceTitle(form.getString("source_canvas"));break;
+            case "external-cold":
+                externalReceived("markdown");externalReceived("canvas");open(form.getString("source_canvas"));waitLabel("Free canvas");open(source);
+                waitNode(node->editorContainsOriginalMarkdown(node,form.optString("draft_body")),"unconfirmed original external draft after cold start");break;
+            default:throw new IllegalStateException("Unreviewed external phase");
+        }
+        progress.append("ORIGINAL_EXTERNAL_REFERENCE ").append(phase).append(" save=").append(phase.endsWith("-seed")?1:0).append('\n');
     }
 
     private void candidateLanguageRead(String phase) throws Exception {

@@ -435,7 +435,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('lifecycle-remaining','lifecycle-editor-remaining','local-references','candidate-languages','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
+        if getattr(self.args,'scope',None) in ('lifecycle-remaining','lifecycle-editor-remaining','local-references','external-links','candidate-languages','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -508,6 +508,14 @@ class Probe:
                     'cc.kronecker.opennexus.testdriver.TargetStabilityCheck']).stdout
                 (self.output / 'driver-target-stability.txt').write_bytes(observed)
                 require(observed.startswith(b'TARGET_STABILITY_OK '), 'Actual driver target-stability check failed')
+                if getattr(self.args,'scope','')=='external-links':
+                    self.command(['javac','-J-Xmx128m','-encoding','UTF-8','-classpath',classes,
+                        '-d',checks,root.parent/'android-runtime-tests/OriginalExternalUriCheck.java'])
+                    observed=self.command(['java','-Xmx64m','-cp',str(classes)+os.pathsep+str(checks),
+                        'cc.kronecker.opennexus.testdriver.OriginalExternalUriCheck']).stdout
+                    (self.output/'driver-original-external-uri.txt').write_bytes(observed)
+                    require(observed.decode('ascii').splitlines()==['OWNED_EXTERNAL_URI_CONTRACT_OK 20 no_OS_dispatch_or_network_claim=1'],
+                        'External original URI admission contract differs')
                 if getattr(self.args, 'scope', '') == 'product-pair':
                     self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,
                         '-d', checks, root.parent / 'android-runtime-tests/OriginalCanvasPropertyCheck.java'])
@@ -939,6 +947,9 @@ class Probe:
             if getattr(getattr(self,'args',None),'scope',None) == 'local-references':
                 from android_reference_contract import PATHS
                 owned_names = PATHS
+            if getattr(getattr(self,'args',None),'scope',None) == 'external-links':
+                from android_external_probe import PATHS
+                owned_names = PATHS
             if getattr(getattr(self,'args',None),'scope',None) == 'performance':
                 owned_names = ('runtime-long.md',)
             if getattr(getattr(self,'args',None),'scope',None) == 'storage-recovery':
@@ -1285,6 +1296,10 @@ class Probe:
             from android_reference_probe import run_references
             run_references(self)
             return
+        if self.args.scope=='external-links':
+            from android_external_probe import run_external
+            run_external(self)
+            return
         if self.args.scope in ('canvas-view','canvas-view-remaining','canvas-view-cold'):
             from android_canvas_view_probe import run_canvas_view
             run_canvas_view(self)
@@ -1451,7 +1466,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'lifecycle-remaining','lifecycle-editor-remaining','local-references','candidate-languages', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'lifecycle-remaining','lifecycle-editor-remaining','local-references','external-links','candidate-languages', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

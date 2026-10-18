@@ -6,6 +6,15 @@
     </queries>
     <uses-permission android:name="cc.kronecker.opennexus.testime.permission.CONTROL" />
     <application android:label="OpenNexus CI driver" android:allowBackup="false" android:debuggable="true">
+        <!-- Reserved own host, explicit hosted test user selection; no domain verification or URL fetch. -->
+        <activity android:name=".ExternalIntentReceiver" android:exported="true" android:excludeFromRecents="true">
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="owned-android-reference.invalid" />
+            </intent-filter>
+        </activity>
     </application>
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.RuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.AuthRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
