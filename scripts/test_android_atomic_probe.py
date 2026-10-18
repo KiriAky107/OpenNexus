@@ -53,9 +53,13 @@ class AtomicContracts(unittest.TestCase):
         for change in [dict(pid=124),dict(nonce='b'*32),dict(uid=0),dict(threads=257),dict(threads=True),dict(extra=1)]:
             with self.assertRaises(RuntimeError):event(dict(value,**change),'ready','a'*32,123,10123)
     def test_entry_is_original_supported_rename_with_distinct_owned_files(self):
-        value=dict(event='entry',nonce='a'*32,pid=123,tid=124,syscall=264,temporary='.tmpA12345',old_inode=10,temp_inode=11,device=2,old_bytes=len(ORIGINAL),temp_bytes=len(UPDATED),trace_counts=dict(entries=100,renames=2,destinations=1,identity_checks=125))
+        value=dict(event='entry',nonce='a'*32,pid=123,tid=124,syscall=264,temporary='.tmpA12345',old_inode=10,temp_inode=11,device=2,old_bytes=len(ORIGINAL),temp_bytes=len(UPDATED),destination_form='relative_dirfd',parent_inode=9,parent_device=2,trace_counts=dict(entries=100,renames=2,candidates=1,directories=1,destinations=1,identity_checks=125))
         self.assertEqual(event(value,'entry','a'*32,123,10123),value)
         for change in [dict(syscall=87),dict(temp_inode=10),dict(temporary='../original.md'),dict(temp_bytes=1),dict(tid=True),dict(event='exit')]:
+            with self.assertRaises(RuntimeError):event(dict(value,**change),'entry','a'*32,123,10123)
+        for form in ('absolute','relative_cwd','relative_dirfd'):
+            event(dict(value,destination_form=form),'entry','a'*32,123,10123)
+        for change in [dict(destination_form='foreign'),dict(parent_inode=0),dict(parent_device=3),dict(parent_device=True)]:
             with self.assertRaises(RuntimeError):event(dict(value,**change),'entry','a'*32,123,10123)
     def test_resumed_original_syscall_cannot_count_as_interrupted(self):
         value=dict(event='stopped',nonce='a'*32,pid=123,original_syscall_resumed=False)
@@ -100,8 +104,8 @@ class AtomicContracts(unittest.TestCase):
             else:changed['files'][0]['revision']=3
             with self.assertRaises(RuntimeError):recovered(before,held,changed)
     def test_trace_counts_are_bounded_integers_without_unrelated_paths(self):
-        counts=dict(entries=100,renames=2,destinations=1,identity_checks=125);self.assertEqual(trace_counts(counts,True),counts)
-        for change in [dict(entries=True),dict(renames=101),dict(destinations=2),dict(entries=1000002),dict(path='/foreign')]:
+        counts=dict(entries=100,renames=2,candidates=1,directories=1,destinations=1,identity_checks=125);self.assertEqual(trace_counts(counts,True),counts)
+        for change in [dict(entries=True),dict(renames=101),dict(destinations=2),dict(directories=0),dict(candidates=0),dict(entries=1000002),dict(path='/foreign')]:
             with self.assertRaises(RuntimeError):trace_counts(dict(counts,**change),True)
     def test_touch_checkpoint_requires_the_original_nonce_stage_and_numeric_clock(self):
         value=dict(nonce='a'*32,stage='before',uptime_ms=100)
@@ -115,7 +119,7 @@ class AtomicContracts(unittest.TestCase):
         trace.process=subprocess.Popen([sys.executable,'-I','-c','import sys;sys.stdout.buffer.write('+repr(body.encode())+')'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         trace.process.stdin.close();trace.process.wait(timeout=5);return trace
     def test_original_finished_pipe_remainder_is_preserved_once_and_closed_safely(self):
-        raw=json.dumps(dict(event='refused',nonce='a'*32,pid=123,held=False,raw_error_exported=False,trace_counts=dict(entries=20,renames=0,destinations=0,identity_checks=120)))+'\n'
+        raw=json.dumps(dict(event='refused',nonce='a'*32,pid=123,held=False,raw_error_exported=False,trace_counts=dict(entries=20,renames=0,candidates=0,directories=0,destinations=0,identity_checks=120)))+'\n'
         with tempfile.TemporaryDirectory() as folder:
             trace=self.ended_trace(folder,raw);first=trace.finish();self.assertEqual(first,(raw.encode(),b''));self.assertEqual(trace.finish(),first)
             self.assertTrue(trace.process.stdout.closed and trace.process.stderr.closed)
@@ -124,7 +128,7 @@ class AtomicContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             trace=self.ended_trace(folder,'');self.assertEqual(trace.finish(),(b'',b''));self.assertEqual(trace.finish(),(b'',b''))
     def test_foreign_original_remainder_is_preserved_but_never_admitted_on_second_read(self):
-        raw=json.dumps(dict(event='refused',nonce='b'*32,pid=123,held=False,raw_error_exported=False,trace_counts=dict(entries=20,renames=0,destinations=0,identity_checks=120)))+'\n'
+        raw=json.dumps(dict(event='refused',nonce='b'*32,pid=123,held=False,raw_error_exported=False,trace_counts=dict(entries=20,renames=0,candidates=0,directories=0,destinations=0,identity_checks=120)))+'\n'
         with tempfile.TemporaryDirectory() as folder:
             trace=self.ended_trace(folder,raw)
             with self.assertRaises(RuntimeError):trace.finish()

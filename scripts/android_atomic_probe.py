@@ -48,9 +48,9 @@ def decode_event(raw):
         parse_constant=lambda value:require(False,'ATOMIC_TRACE_NONFINITE'))
 
 def trace_counts(value,matched=False):
-    require(type(value) is dict and set(value)=={'entries','renames','destinations','identity_checks'}
+    require(type(value) is dict and set(value)=={'entries','renames','candidates','directories','destinations','identity_checks'}
         and all(type(v) is int and 0<=v<=4000000 for v in value.values())
-        and value['destinations']<=value['renames']<=value['entries']<=1000001,'ATOMIC_TRACE_COUNTS')
+        and value['destinations']<=value['directories']<=value['candidates']<=value['renames']<=value['entries']<=1000001,'ATOMIC_TRACE_COUNTS')
     if matched:require(value['destinations']==1 and value['identity_checks']>0 and value['entries']<=1000000,'ATOMIC_TRACE_MATCH_COUNTS')
     return value
 
@@ -80,7 +80,7 @@ def preserve_driver_output(probe,output):
 
 def event(value,expected,nonce,pid,uid):
     fields={'ready':{'event','nonce','pid','uid','threads'},'armed':{'event','nonce','pid'},
-        'entry':{'event','nonce','pid','tid','syscall','temporary','old_inode','temp_inode','device','old_bytes','temp_bytes','trace_counts'},
+        'entry':{'event','nonce','pid','tid','syscall','temporary','old_inode','temp_inode','device','old_bytes','temp_bytes','destination_form','parent_inode','parent_device','trace_counts'},
         'stopped':{'event','nonce','pid','original_syscall_resumed'}}
     require(expected in fields and type(value) is dict and set(value)==fields[expected]
         and value['event']==expected and value['nonce']==nonce and type(value['pid']) is int and value['pid']==pid,'ATOMIC_ORIGINAL_TRACE_EVENT')
@@ -89,11 +89,13 @@ def event(value,expected,nonce,pid,uid):
             and 1<=value['threads']<=256,'ATOMIC_ORIGINAL_TRACE_THREADS')
     elif expected=='entry':
         trace_counts(value['trace_counts'],True)
-        require(all(type(value[k]) is int and value[k]>0 for k in ('tid','syscall','old_inode','temp_inode','device','old_bytes','temp_bytes'))
+        require(all(type(value[k]) is int and value[k]>0 for k in ('tid','syscall','old_inode','temp_inode','device','old_bytes','temp_bytes','parent_inode','parent_device'))
             and value['tid']<2**31 and value['syscall'] in (82,264,316)
             and value['old_inode']!=value['temp_inode'] and value['old_bytes']==len(ORIGINAL)
             and value['temp_bytes']==len(UPDATED) and type(value['temporary']) is str
-            and re.fullmatch(r'\.tmp[A-Za-z0-9]{5,31}',value['temporary']),'ATOMIC_EXACT_REPLACE_ENTRY')
+            and re.fullmatch(r'\.tmp[A-Za-z0-9]{5,31}',value['temporary'])
+            and value['parent_device']==value['device']
+            and value['destination_form'] in ('absolute','relative_cwd','relative_dirfd'),'ATOMIC_EXACT_REPLACE_ENTRY')
     elif expected=='stopped':require(value['original_syscall_resumed'] is False,'ATOMIC_SYSCALL_WAS_RESUMED')
     return value
 
@@ -216,7 +218,7 @@ def build_observer(probe):
     require(check.returncode==0,'ATOMIC_HOST_C_COMPILE')
     check=probe.command([host,'--self-test'],check=False)
     (probe.output/'atomic-observer-data.txt').write_bytes(check.stdout)
-    require(check.returncode==0 and check.stdout==b'ORIGINAL_ATOMIC_OBSERVER_DATA_OK 15\n','ATOMIC_HOST_C_DATA_CHECK')
+    require(check.returncode==0 and check.stdout==b'ORIGINAL_ATOMIC_OBSERVER_DATA_OK 60\n','ATOMIC_HOST_C_DATA_CHECK')
     compiler=probe.args.sdk/'ndk'/NDK/'toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang'
     require(compiler.is_file() and compiler.resolve().is_relative_to(probe.args.sdk.resolve()),'ATOMIC_PINNED_NDK_REQUIRED')
     result=probe.command([compiler,'-std=c11','-O1','-Wall','-Wextra','-Werror=implicit-function-declaration',source,'-o',binary],check=False)
