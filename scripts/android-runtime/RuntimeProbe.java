@@ -77,6 +77,17 @@ public final class RuntimeProbe extends Instrumentation {
                 case "files-canvas-delete-apply":
                 case "files-canvas-deleted-cold":
                     localFileActions(phase); break;
+                case "search-seed-original":
+                case "search-seed-control":
+                case "search-browse":
+                case "search-query-0":
+                case "search-query-1":
+                case "search-query-2":
+                case "search-query-3":
+                case "search-query-4":
+                case "search-query-5":
+                case "search-open":
+                    originalNoteSearch(phase); break;
                 case "storage-init": waitLabel("Start writing"); break;
                 case "storage-seed":
                 case "storage-fail":
@@ -570,6 +581,55 @@ public final class RuntimeProbe extends Instrumentation {
             require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()), OriginalStorageScenario.UPDATED),
                 "Actual cold original storage note differs");
         }
+    }
+
+    private void originalNoteSearch(String phase) throws Exception {
+        if(phase.equals("search-seed-original")||phase.equals("search-seed-control")) {
+            boolean original=phase.equals("search-seed-original");
+            create("New note",original?OriginalNoteSearch.PATH:OriginalNoteSearch.CONTROL_PATH);
+            inputText(noteBody(),original?OriginalNoteSearch.SEED:OriginalNoteSearch.CONTROL);save();return;
+        }
+        if(phase.equals("search-browse")) {
+            waitNotesLanding();clickTitleBar("Files");
+            AccessibilityNodeInfo folder=waitNode(n->label(n,OriginalNoteSearch.DIRECTORY,false)&&n.isEnabled()&&fileDrawerRow(n),"original Chinese directory, not a recent-note card");
+            activate(folder,this::fileDrawerRow);
+            searchResult(OriginalNoteSearch.NAME,OriginalNoteSearch.CONTROL_NAME,true);
+            return;
+        }
+        if(phase.equals("search-open")) {
+            searchOnce(OriginalNoteSearch.NEGATIVE);searchResult(null,null,false);
+            searchOnce("资料😀");searchResult(OriginalNoteSearch.NAME,OriginalNoteSearch.CONTROL_NAME,false);
+            AccessibilityNodeInfo file=waitNode(n->label(n,OriginalNoteSearch.NAME,false)&&n.isEnabled()&&fileDrawerRow(n),"original literal-search file");
+            activate(file,this::fileDrawerRow);
+            waitNode(n->APP.equals(string(n.getPackageName()))&&!n.isClickable()&&label(n,OriginalNoteSearch.NAME,false)&&titleBarControl(n),"original searched document title");
+            require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()).replace("\r\n","\n"),OriginalNoteSearch.ORIGINAL.replace("\r\n","\n")),"Actual searched original Markdown body differs");
+            return;
+        }
+        int index=OriginalNoteSearch.queryIndex(phase);
+        searchOnce(OriginalNoteSearch.NEGATIVE);searchResult(null,null,false);
+        searchOnce(OriginalNoteSearch.QUERIES[index]);
+        String expected=OriginalNoteSearch.expected(index),other=index==5?OriginalNoteSearch.NAME:OriginalNoteSearch.CONTROL_NAME;
+        searchResult(expected,other,false);
+        progress.append("ORIGINAL_NOTE_SEARCH_RESULT ").append(index).append(" negative=0 positive=1\n");
+    }
+    private void searchOnce(String query) {
+        AccessibilityNodeInfo input=waitNode(n->APP.equals(string(n.getPackageName()))&&n.isEditable()&&label(n,"Search names and text",false),"owned exact file-search input");
+        setText(input,query);hideKeyboard();
+        java.util.function.Predicate<AccessibilityNodeInfo> button=n->OriginalNoteSearch.searchButton(APP.equals(string(n.getPackageName())),string(n.getClassName()),string(n.getText()),string(n.getContentDescription()),n.isEnabled(),n.isClickable());
+        AccessibilityNodeInfo original=waitNode(button,"owned actual Search submit button");activate(original,button);
+    }
+    private void searchResult(String expected,String other,boolean both) {
+        if(expected==null)waitLabel("No saved notes here");
+        else waitNode(n->label(n,expected,false)&&fileDrawerRow(n),"original actual search-result leaf");
+        if(both)waitNode(n->label(n,other,false)&&fileDrawerRow(n),"second actual directory leaf");
+        int main=0,control=0;
+        for(AccessibilityNodeInfo node:nodes())if(node.isVisibleToUser()&&fileDrawerRow(node)) {
+            if(label(node,OriginalNoteSearch.NAME,false))main++;
+            if(label(node,OriginalNoteSearch.CONTROL_NAME,false))control++;
+        }
+        if(expected==null)require(main==0&&control==0,"Empty actual search still has an owned result");
+        else if(both)require(main==1&&control==1,"Original nested directory did not show both files");
+        else require(main==(expected.equals(OriginalNoteSearch.NAME)?1:0)&&control==(expected.equals(OriginalNoteSearch.CONTROL_NAME)?1:0),"Search is not the exact literal result or leaked the nonmatching control");
     }
 
     private void localFileActions(String phase) throws Exception {
