@@ -1,12 +1,30 @@
 """Original property scope contracts, not actual Native input acceptance."""
 from pathlib import Path
 from unittest.mock import Mock
-import json,unittest,yaml
+import json,unittest,yaml,shutil,subprocess,tempfile
 from android_workflow_gate import admitted
 from android_canvas_graph_probe import snapshot
 from android_canvas_properties import PATH,STEPS,TRANSACTIONS,driver_form
+from android_canvas_properties_probe import driver_form_write_script
 
 class PropertyProbeBoundaries(unittest.TestCase):
+    def test_original_driver_form_creates_only_its_missing_files_directory_and_never_overwrites(self):
+        shell=shutil.which('sh')
+        if not shell and Path('C:/Program Files/Git/usr/bin/sh.exe').is_file():
+            shell='C:/Program Files/Git/usr/bin/sh.exe'
+        if not shell:self.skipTest('A real POSIX shell is required for the Android shell-script contract')
+        original=json.dumps({'properties-text':driver_form('properties-text')},ensure_ascii=False).encode()
+        script='PATH=/usr/bin:/bin:$PATH; '+driver_form_write_script()
+        with tempfile.TemporaryDirectory(prefix='onx-owned-properties-') as directory:
+            root=Path(directory)
+            result=subprocess.run([shell,'-c',script],cwd=root,input=original,capture_output=True,timeout=10)
+            self.assertEqual(result.returncode,0,result.stderr.decode('utf-8','replace'))
+            self.assertEqual((root/'files/owned-properties-form.json').read_bytes(),original)
+            self.assertEqual({p.name for p in root.iterdir()},{'files'})
+            second=subprocess.run([shell,'-c',script],cwd=root,input=b'replacement refused',capture_output=True,timeout=10)
+            self.assertNotEqual(second.returncode,0)
+            self.assertEqual((root/'files/owned-properties-form.json').read_bytes(),original)
+
     def test_foreign_path_or_phase_is_rejected_before_private_reads(self):
         probe=Mock();probe.args.scope='canvas-properties'
         for path,phase in [('other.canvas','properties-text'),(PATH,'graph-open'),(PATH,'properties-text/../../other')]:

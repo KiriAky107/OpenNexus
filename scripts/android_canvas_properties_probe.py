@@ -6,6 +6,9 @@ from android_canvas_graph_contract import graph,identical_original_bytes
 from android_canvas_graph_probe import snapshot,projection,saved_original
 from android_canvas_properties import PATH,FIXTURE,STEPS,TRANSACTIONS,driver_form,validate_transaction
 
+def driver_form_write_script():
+    return 'umask 077; mkdir -p files && test ! -e files/owned-properties-form.json && cat > files/owned-properties-form.json'
+
 def run_properties(probe):
     require_hosted_emulator(probe.args.serial);require(probe.args.scope=='canvas-properties','PROPERTY_EXPLICIT_SCOPE')
     report=dict(passed=False,run_id=os.environ['GITHUB_RUN_ID'],tools_source=probe.args.tools_commit,
@@ -36,7 +39,7 @@ def run_properties(probe):
         payload=json.dumps(forms,ensure_ascii=False).encode();require(len(payload)<=8192,'PROPERTY_BOUNDED_FORMS')
         atomic_json(probe.output/'properties-reviewed-forms.json',forms,exclusive=True)
         probe.device('shell','-T',shlex.join(('run-as',DRIVER,'sh','-c',
-            'umask 077; test ! -e files/owned-properties-form.json && cat > files/owned-properties-form.json')),input=payload)
+            driver_form_write_script())),input=payload)
         before,raw=phase('properties-open');identical_original_bytes(FIXTURE,raw)
         opened_pid=probe.shell('pidof',APP).stdout.strip()
         require(opened_pid!=first_pid and before['files'][0]['id']==identity,'PROPERTY_NEW_PROCESS_OR_ORIGINAL_FILE_CHANGED')
