@@ -125,6 +125,20 @@ class StoppedReleaseObserver:
             'RELEASE_OBSERVATION_SYMLINK_OR_FOREIGN_FILE')
         return name
 
+    def discover_data_root(self):
+        self.require_stopped()
+        raw = self.shell('find', '/data/user/0/' + APP, '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout
+        require(len(raw) <= 8192, 'RELEASE_OBSERVATION_ROOT_DISCOVERY_BOUND')
+        paths = raw.decode('utf-8', 'strict').splitlines()
+        require(len(paths) == 1 and paths[0].endswith('/mobile-drafts.sqlite3'),
+            'RELEASE_OBSERVATION_SINGLE_NATIVE_DRAFT_ROOT')
+        root = paths[0][:-len('mobile-drafts.sqlite3')]
+        if root.startswith('/data/data/' + APP + '/'):
+            root = root.replace('/data/data/', '/data/user/0/', 1)
+        admit_root(root)
+        self.path(root, 'mobile-drafts.sqlite3')
+        return root
+
     def copy_stopped(self, root, label):
         admit_root(root)
         require(type(label) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,47}', label), 'RELEASE_OBSERVATION_LABEL')

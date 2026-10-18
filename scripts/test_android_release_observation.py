@@ -47,6 +47,8 @@ class Device:
             elif cmd == ['ps', '-A', '-o', 'NAME']:
                 out = ('NAME\ninit\nadbd\n' + (APP + ':worker\n' if self.active else '')).encode()
             elif cmd == ['dumpsys', 'package', APP]: out = ('  User 0: installed=true stopped=' + str(self.stopped).lower() + ' enabled=0\n').encode()
+            elif cmd == ['find', '/data/user/0/' + APP, '-name', 'mobile-drafts.sqlite3', '-type', 'f']:
+                out = (ROOT + 'mobile-drafts.sqlite3\n').encode()
             elif cmd[0] == 'test':
                 name = cmd[-1]; exists = name in self.files
                 rc = int(not (exists if cmd[1] in ('-e', '-f') else not exists if cmd[2] == '-e' else True))
@@ -109,6 +111,13 @@ class Boundaries(unittest.TestCase):
             view.start_root_observation(); device.tamper = True
             with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_CHANGED'): view.copy_stopped(ROOT, 'changed')
             self.assertFalse((view.output/'changed/snapshot.json').exists())
+
+    def test_native_root_is_discovered_only_inside_exact_stopped_app(self):
+        with observer() as (view, device):
+            view.start_root_observation()
+            self.assertEqual(view.discover_data_root(), ROOT)
+            device.active = True
+            with self.assertRaisesRegex(RuntimeError, 'APP_NOT_STOPPED'): view.discover_data_root()
 
     def test_absent_process_is_not_proof_scheduled_work_cannot_start(self):
         with observer() as (view, device):
