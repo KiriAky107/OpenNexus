@@ -34,6 +34,10 @@ def prerelease_for_version(version, explicit=None):
     return inferred
 
 
+def release_tag(product,version):
+    return ('android-v' if product=='OpenNexus for Android' else 'v')+version
+
+
 def digest(path):
     with Path(path).open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
@@ -128,8 +132,11 @@ class Plan:
         require(isinstance(p.get('version'), str) and VERSION.fullmatch(p['version']), 'VERSION_INVALID')
         require('prerelease' not in p or isinstance(p['prerelease'], bool), 'PRERELEASE_FLAG_INVALID')
         self.prerelease = prerelease_for_version(p['version'], p.get('prerelease'))
-        require(p.get('tag') == 'v'+p['version'] and COMMIT.fullmatch(p.get('commit', '')), 'TAG_OR_COMMIT_INVALID')
+        require(p.get('tag') == release_tag(p.get('product'),p['version']) and COMMIT.fullmatch(p.get('commit', '')), 'TAG_OR_COMMIT_INVALID')
         require(isinstance(p.get('product'), str) and len(p['product']) <= 100 and '\n' not in p['product'], 'PRODUCT_INVALID')
+        android=p['product']=='OpenNexus for Android'
+        require(android or 'android' not in p,'ANDROID_METADATA_ON_OTHER_PRODUCT')
+        self.make_latest=not self.prerelease and not android
         assets = p.get('assets')
         require(isinstance(assets, list) and 2 <= len(assets) <= 16, 'ASSET_COUNT_INVALID')
         require(all(isinstance(asset, dict) for asset in assets), 'ASSET_RECORD_INVALID')
@@ -160,7 +167,12 @@ class Plan:
         require(digest(receipt) == proof.get('sha256'), 'VERIFICATION_CHANGED')
         result = json.loads(receipt.read_text('utf-8'))
         require(result.get('source_commit') == p['commit'] and result.get('source_clean') is True, 'BUILD_SOURCE_MISMATCH')
-        if p['product'] == 'OpenNexus':
+        if android:
+            from android_release_contract import asset_names,validate
+            require(set(names)==asset_names(p['version']),'ANDROID_RELEASE_ASSET_NAMES')
+            installer=next((a for a in assets if a.get('kind')=='installer'),None)
+            self.android=validate(p,result,installer)
+        elif p['product'] == 'OpenNexus':
             require(set(names) == {f'OpenNexus_{p["version"]}_x64-setup.exe', f'OpenNexus_{p["version"]}_source.zip', 'SHA256SUMS.txt'}, 'DESKTOP_ASSET_NAMES_INVALID')
             installer = next((a for a in assets if a.get('kind') == 'installer'), None)
             require(installer is not None and result.get('installer_sha256') == installer['sha256'], 'INSTALLER_VERIFICATION_MISMATCH')

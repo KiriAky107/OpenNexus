@@ -346,14 +346,14 @@ class Publisher:
             self.journal.record('promoted', id=promoted['id'], name=asset['name'])
         desired = not release['draft'] and release['prerelease'] == self.plan.prerelease and text_digest(release['body']) == self.p['notes_sha256'] and release['target_commitish'] == self.p['commit']
         latest = self.api.request('GET', self.prefix+'/releases/latest') if desired else None
-        correct_latest = (not latest or latest['id'] != release['id']) if self.plan.prerelease else (latest and latest['id'] == release['id'])
+        correct_latest = (not latest or latest['id'] != release['id']) if not self.plan.make_latest else (latest and latest['id'] == release['id'])
         if desired and correct_latest:
             updated = release
         else:
             self.journal.record('publish-intent', release_id=release['id'], notes_sha256=self.p['notes_sha256'])
             updated = self.api.request('PATCH', self.prefix+'/releases/'+str(release['id']), {'name': self.p['product']+' '+self.p['version'],
                 'body': self.plan.notes, 'target_commitish': self.p['commit'], 'draft': False,
-                'prerelease': self.plan.prerelease, 'make_latest': 'false' if self.plan.prerelease else 'true'})
+                'prerelease': self.plan.prerelease, 'make_latest': 'true' if self.plan.make_latest else 'false'})
         require(updated['id'] == release['id'] and text_digest(updated['body']) == self.p['notes_sha256'], 'PUBLISHED_NOTES_MISMATCH')
         self.verify(allow_originals=True)
         current = self.assets(updated)
@@ -376,8 +376,8 @@ class Publisher:
         require(self.tag() == {'ref_sha': self.p['commit'], 'commit': self.p['commit']}, 'RELEASE_TAG_MISMATCH')
         latest = self.api.request('GET', self.prefix+'/releases/latest')
         is_latest = bool(latest and latest['id'] == release['id'])
-        require(not is_latest if self.plan.prerelease else is_latest,
-                'PRERELEASE_MARKED_LATEST' if self.plan.prerelease else 'RELEASE_NOT_LATEST')
+        require(is_latest if self.plan.make_latest else not is_latest,
+                'PRERELEASE_MARKED_LATEST' if self.plan.prerelease else 'RELEASE_NOT_LATEST' if self.plan.make_latest else 'ANDROID_RELEASE_MARKED_LATEST')
         current = self.assets(release)
         expected = {asset['name'] for asset in self.p['assets']}
         if allow_originals:

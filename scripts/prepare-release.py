@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 
-from release_plan import COMMIT, PRIVATE, VERSION, Plan, ReleaseError, atomic_json, check_local_source, digest, fixed_archive, prerelease_for_version, require, text_digest
+from release_plan import COMMIT, PRIVATE, VERSION, Plan, ReleaseError, atomic_json, check_local_source, digest, fixed_archive, prerelease_for_version, release_tag, require, text_digest
 
 
 def git(root, *args):
@@ -27,6 +27,13 @@ def prepare(root, output, *, repository, product, version, commit, notes, verifi
     require(not any(name.casefold().startswith(PRIVATE) for name in tracked), 'PRIVATE_SOURCE_TRACKED')
     proof = json.loads(Path(verification).read_text('utf-8'))
     require(proof.get('source_commit') == commit and proof.get('source_clean') is True, 'BUILD_SOURCE_MISMATCH')
+    android=product=='OpenNexus for Android'
+    if android:
+        from android_release_contract import validate
+        require(installer is not None and deployment is None,'ANDROID_RELEASE_INSTALLER_ONLY')
+        require(Path(installer).is_file() and not Path(installer).is_symlink(),'ANDROID_RELEASE_APK_INPUT')
+        validate(dict(product=product,version=version,commit=commit,tag=release_tag(product,version),android=proof.get('android'),original=original),
+            proof,dict(kind='installer',name=f'OpenNexus_Android_{version}_arm64-v8a.apk',sha256=digest(installer)))
     output.mkdir(parents=True, exist_ok=False)
     # Output is intentionally new. Existing releases and backups are never replaced.
     assets = []
@@ -34,12 +41,12 @@ def prepare(root, output, *, repository, product, version, commit, notes, verifi
     def asset(file, kind):
         assets.append({'name': file.name, 'file': file.name, 'kind': kind, 'bytes': file.stat().st_size, 'sha256': digest(file)})
 
-    source = output/f'{repository.split("/")[1]}_{version}_source.zip'
+    source = output/(f'OpenNexus_Android_{version}_source.zip' if android else f'{repository.split("/")[1]}_{version}_source.zip')
     fixed_archive(root, commit, source)
     asset(source, 'source')
     if installer:
-        require(product == 'OpenNexus' and proof.get('installer_sha256') == digest(installer), 'INSTALLER_SOURCE_MISMATCH')
-        target = output/f'OpenNexus_{version}_x64-setup.exe'
+        require(android or product == 'OpenNexus' and proof.get('installer_sha256') == digest(installer), 'INSTALLER_SOURCE_MISMATCH')
+        target = output/(f'OpenNexus_Android_{version}_arm64-v8a.apk' if android else f'OpenNexus_{version}_x64-setup.exe')
         shutil.copyfile(installer, target)
         assets.insert(0, {'name': target.name, 'file': target.name, 'kind': 'installer', 'bytes': target.stat().st_size, 'sha256': digest(target)})
     if deployment:
@@ -48,7 +55,7 @@ def prepare(root, output, *, repository, product, version, commit, notes, verifi
         shutil.copyfile(deployment, target)
         asset(target, 'deployment')
     require(product != 'OpenNexus' or installer is not None, 'DESKTOP_INSTALLER_REQUIRED')
-    require(product == 'OpenNexus' or deployment is not None, 'SERVICE_DEPLOYMENT_REQUIRED')
+    require(android or product == 'OpenNexus' or deployment is not None, 'SERVICE_DEPLOYMENT_REQUIRED')
     sums = output/'SHA256SUMS.txt'
     sums.write_text(''.join(f'{entry["sha256"]}  {entry["name"]}\n' for entry in assets), encoding='utf-8', newline='\n')
     asset(sums, 'checksums')
@@ -56,9 +63,10 @@ def prepare(root, output, *, repository, product, version, commit, notes, verifi
     release_notes.write_text(Path(notes).read_text('utf-8').replace('\r\n', '\n'), encoding='utf-8', newline='\n')
     receipt = output/'verification.json'
     shutil.copyfile(verification, receipt)
-    data = {'schema': 1, 'repository': repository, 'product': product, 'version': version, 'tag': 'v'+version, 'commit': commit, 'prerelease': prerelease,
+    data = {'schema': 1, 'repository': repository, 'product': product, 'version': version, 'tag': release_tag(product,version), 'commit': commit, 'prerelease': prerelease,
             'assets': assets, 'notes_file': release_notes.name, 'notes_sha256': text_digest(release_notes.read_text('utf-8')),
             'verification': {'file': receipt.name, 'sha256': digest(receipt)}, 'original': original}
+    if android:data['android']=proof['android']
     path = output/'release-plan.json'
     atomic_json(path, data)
     plan = Plan(path)
