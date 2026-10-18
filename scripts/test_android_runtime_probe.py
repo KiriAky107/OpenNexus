@@ -1004,6 +1004,15 @@ class RuntimeBoundaries(unittest.TestCase):
                     'expected_tests':4,'signer_certificate_sha256':'a'*64,'bytes':len(test),'sha256':digest(test)}}
             metadata=root/'package-verification.json';metadata.write_text(json.dumps(proof))
             validate_binding(root,'fixed')
+            uri={'test_class':'cc.kronecker.opennexus.files.MobileExternalUriTest','expected_tests':2,
+                'actual_device_tests_passed':False,'actual_OS_handoff_verified':False}
+            proof['native_external_uri']=uri;metadata.write_text(json.dumps(proof));validate_binding(root,'fixed')
+            for key,value in [('test_class','other'),('expected_tests',True),('expected_tests',2.0),
+                    ('actual_device_tests_passed',True),('actual_OS_handoff_verified',True)]:
+                proof['native_external_uri']=dict(uri,**{key:value});metadata.write_text(json.dumps(proof))
+                with self.subTest(key=key,value=value),self.assertRaisesRegex(RuntimeError,'External URI test binding mismatch'):
+                    validate_binding(root,'fixed')
+            del proof['native_external_uri']
             proof['native_tests']['expected_tests']=5;metadata.write_text(json.dumps(proof))
             with self.assertRaisesRegex(Exception,'Native Rust worker binding mismatch'):validate_binding(root,'fixed')
             symbol='Java_cc_kronecker_opennexus_sync_NativeCredentialProbe_roundTrip'

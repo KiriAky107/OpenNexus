@@ -14,6 +14,21 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_external_uri_suite_requires_both_actual_app_and_test_descriptors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);app=root/'app.apk';tests=root/'tests.apk'
+            for path,descriptor in ((app,b'Lcc/kronecker/opennexus/files/MobileFilesPluginKt;'),
+                    (tests,b'Lcc/kronecker/opennexus/files/MobileExternalUriTest;')):
+                with zipfile.ZipFile(path,'w') as archive:archive.writestr('classes.dex',descriptor)
+            result=module.verify_external_uri_tests(app,tests)
+            self.assertEqual(result['expected_tests'],2)
+            self.assertFalse(result['actual_device_tests_passed']);self.assertFalse(result['actual_OS_handoff_verified'])
+            for path in (app,tests):
+                raw=path.read_bytes()
+                with zipfile.ZipFile(path,'w') as archive:archive.writestr('classes.dex',b'unrelated')
+                with self.assertRaisesRegex(Exception,'ANDROID_EXTERNAL_URI_CLASS_MISSING'):module.verify_external_uri_tests(app,tests)
+                path.write_bytes(raw)
+
     def test_window_insets_suite_requires_both_real_apk_class_descriptors(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);app=root/'app.apk';tests=root/'tests.apk'

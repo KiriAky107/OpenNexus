@@ -203,6 +203,12 @@ def validate_binding(bundle, commit):
             and window_tests.get('expected_tests') == 3
             and window_tests.get('actual_device_tests_passed') is False
             and window_tests.get('actual_keyboard_visibility_verified') is False, 'Window inset test binding mismatch')
+    if uri_tests := proof.get('native_external_uri'):
+        require(native_tests and type(uri_tests) is dict
+            and uri_tests.get('test_class') == 'cc.kronecker.opennexus.files.MobileExternalUriTest'
+            and type(uri_tests.get('expected_tests')) is int and uri_tests['expected_tests'] == 2
+            and uri_tests.get('actual_device_tests_passed') is False
+            and uri_tests.get('actual_OS_handoff_verified') is False, 'External URI test binding mismatch')
     return apk, proof
 
 

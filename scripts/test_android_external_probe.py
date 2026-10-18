@@ -15,6 +15,29 @@ def state():
 
 
 class ExternalObservationBoundaries(unittest.TestCase):
+    def test_native_uri_execution_is_one_new_bounded_suite_not_old_native_checks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            probe=Mock();probe.output=Path(folder);probe.args=SimpleNamespace(scope='external-links',bundle=Path(folder),commit='a'*40)
+            tests=dict(apk='OpenNexus-android-tests.apk',sha256='b'*64,package=subject.APP+'.test',target_package=subject.APP,
+                runner='androidx.test.runner.AndroidJUnitRunner')
+            uri=dict(test_class='cc.kronecker.opennexus.files.MobileExternalUriTest',expected_tests=2,
+                actual_device_tests_passed=False,actual_OS_handoff_verified=False)
+            probe.binding=dict(sha256='c'*64,native_tests=tests,native_external_uri=uri)
+            probe.shell.side_effect=[SimpleNamespace(stdout=b''),SimpleNamespace(returncode=0,stdout=b'OK (2 tests)\n',stderr=b'')]
+            value=subject.native_uri_regression(probe)
+            self.assertTrue(value['passed']);self.assertFalse(value['OS_handoff_or_network_or_physical_verified'])
+            probe.device.assert_called_once_with('install','-t','--no-streaming',Path(folder)/tests['apk'])
+            self.assertEqual(probe.shell.call_args.args[0:6],('am','instrument','-w','-r','-e','class'))
+            self.assertIn(uri['test_class'],probe.shell.call_args.args)
+            probe.phase.assert_not_called();probe.native_keystore_tests.assert_not_called()
+
+    def test_native_uri_missing_is_unknown_and_bad_count_cannot_become_success(self):
+        probe=Mock();probe.args=SimpleNamespace(scope='external-links');probe.binding={}
+        self.assertIsNone(subject.native_uri_regression(probe));probe.device.assert_not_called();probe.shell.assert_not_called()
+        probe.binding={'native_external_uri':dict(test_class='other',expected_tests=True)}
+        with self.assertRaisesRegex(RuntimeError,'URI_BINDING'):subject.native_uri_regression(probe)
+        probe.device.assert_not_called();probe.shell.assert_not_called()
+
     def test_every_original_file_draft_and_receipt_is_retained(self):
         raw=subject.originals();base=state();changed=deepcopy(base)
         changed[subject.MD_PATH]['drafts'][0]['edit_session']='cold';subject.validate_frozen(raw,base,changed,raw)

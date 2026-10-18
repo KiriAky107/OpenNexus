@@ -12,6 +12,35 @@ from android_external_routing import setup as setup_routing,cleanup as cleanup_r
 PATHS=(MD_PATH,CANVAS_PATH)
 
 
+def native_uri_regression(probe):
+    require(probe.args.scope=='external-links','EXTERNAL_NATIVE_URI_SCOPE')
+    binding=probe.binding.get('native_external_uri')
+    if binding is None:
+        return None  # Old immutable APKs have no new suite; never infer its result.
+    require(type(binding) is dict and binding==dict(test_class='cc.kronecker.opennexus.files.MobileExternalUriTest',
+        expected_tests=2,actual_device_tests_passed=False,actual_OS_handoff_verified=False),'EXTERNAL_NATIVE_URI_BINDING')
+    tests=probe.binding['native_tests'];package=APP+'.test'
+    require(tests['package']==package and tests['target_package']==APP
+        and tests['runner']=='androidx.test.runner.AndroidJUnitRunner','EXTERNAL_NATIVE_URI_ORIGINAL_TEST_APK')
+    require('package:'+package not in probe.shell('pm','list','packages',package).stdout.decode().splitlines(),
+        'EXTERNAL_NATIVE_URI_TEST_PACKAGE_ALREADY_PRESENT')
+    atomic_json(probe.output/'external-native-uri-intent.json',dict(test_APK_sha256=tests['sha256'],
+        test_class=binding['test_class'],expected_tests=2,product_GUI_Save_or_OS_Open_requested=False),exclusive=True)
+    probe.device('install','-t','--no-streaming',probe.args.bundle/tests['apk'])
+    result=probe.shell('am','instrument','-w','-r','-e','class',binding['test_class'],
+        package+'/'+tests['runner'],timeout=90,check=False)
+    for suffix,raw in (('log',result.stdout),('stderr',result.stderr)):
+        with (probe.output/('external-native-uri.'+suffix)).open('xb') as stream:
+            stream.write(raw);stream.flush();os.fsync(stream.fileno())
+    require(result.returncode==0 and b'OK (2 tests)' in result.stdout
+        and not any(v in result.stdout for v in (b'FAILURES!!!',b'INSTRUMENTATION_FAILED')),'EXTERNAL_NATIVE_URI_TESTS_FAILED')
+    proof=dict(passed=True,tests=2,test_APK_sha256=tests['sha256'],APK_sha256=probe.binding['sha256'],
+        source_commit=probe.args.commit,test_class=binding['test_class'],actual_Android_Uri_only=True,
+        OS_handoff_or_network_or_physical_verified=False)
+    atomic_json(probe.output/'external-native-uri-proof.json',proof,exclusive=True)
+    return proof
+
+
 def originals():return {MD_PATH:BODY.encode(),CANVAS_PATH:canvas_fixture()}
 
 
@@ -134,7 +163,9 @@ def run_external(probe):
         require(log.count('ORIGINAL_EXTERNAL_FORM_SHA256 '+hashlib.sha256(payload).hexdigest())==1,'EXTERNAL_FORM_NOT_ORIGINAL_BYTES')
         return value
     try:
-        require(probe.keystore_test_result is None,'EXTERNAL_MUST_NOT_REPLAY_NATIVE_SUITES');probe.enable_test_ime()
+        require(probe.keystore_test_result is None,'EXTERNAL_MUST_NOT_REPLAY_NATIVE_SUITES')
+        report['new_native_URI_regression']=native_uri_regression(probe)
+        probe.enable_test_ime()
         atomic_json(probe.output/'external-reviewed-form.json',driver_form(),exclusive=True)
         transfer(probe,'owned-external-form.json',payload)
         setup_routing(probe)  # Validate before any new product GUI seed or Save.
