@@ -51,6 +51,7 @@ public final class RuntimeProbe extends Instrumentation {
             String phase = arguments.getString("phase", "");
             switch (phase) {
                 case "files-md-seed":
+                case "files-md-seed-renamed":
                 case "files-md-rename-old":
                 case "files-md-reject-old":
                 case "files-md-cancel-old":
@@ -64,6 +65,7 @@ public final class RuntimeProbe extends Instrumentation {
                 case "files-md-delete-apply":
                 case "files-md-deleted-cold":
                 case "files-canvas-seed":
+                case "files-canvas-seed-renamed":
                 case "files-canvas-rename-old":
                 case "files-canvas-reject-old":
                 case "files-canvas-cancel-old":
@@ -635,8 +637,8 @@ public final class RuntimeProbe extends Instrumentation {
     private void localFileActions(String phase) throws Exception {
         String kind=OriginalFileActions.kind(phase), step=phase.substring(("files-"+kind+"-").length());
         boolean canvas=kind.equals("canvas");
-        if (step.equals("seed")) {
-            create(canvas?"New canvas":"New note",OriginalFileActions.original(kind));
+        if (step.equals("seed") || step.equals("seed-renamed")) {
+            create(canvas?"New canvas":"New note",step.equals("seed-renamed")?OriginalFileActions.destination(kind):OriginalFileActions.original(kind));
             if (canvas) {
                 click("Text",false);
                 setText(editable("New text"),OriginalFileActions.NODE);
@@ -645,8 +647,7 @@ public final class RuntimeProbe extends Instrumentation {
             save();
         } else if (step.equals("rename-old") || step.equals("rename-new")) {
             hideKeyboard();
-            clickMenu("More actions"); // Shared document menu, not selected Canvas-node actions.
-            click("Rename",false);
+            localDocumentAction("Rename");
             setText(waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
                 && label(node,"Note path",false), "original reviewed rename path"),OriginalFileActions.destination(kind));
             hideKeyboard();
@@ -671,8 +672,7 @@ public final class RuntimeProbe extends Instrumentation {
             localFileButton("Apply reviewed action");
             waitLabel("Completed");
         } else if (step.equals("delete-cancel-preview") || step.equals("delete-preview")) {
-            clickMenu("More actions"); // Shared document menu, not selected Canvas-node actions.
-            click("Delete",false);
+            localDocumentAction("Delete");
             waitLabel("Awaiting confirmation");
             recordLocalFileFreeze();
         } else if (step.equals("reopen") || step.equals("renamed-cold")) {
@@ -699,6 +699,20 @@ public final class RuntimeProbe extends Instrumentation {
             require(!visibleLabel(OriginalFileActions.original(kind)) && !visibleLabel("资料😀."+kind),
                 "Deleted own file is still in the fresh root listing");
         }
+    }
+
+    private void localDocumentAction(String wanted) {
+        Predicate<AccessibilityNodeInfo> named = n -> OriginalFileActions.documentAction(
+            APP.equals(string(n.getPackageName())),string(n.getClassName()),string(n.getText()),string(n.getContentDescription()),wanted);
+        List<AccessibilityNodeInfo> visible=new ArrayList<>();
+        for(AccessibilityNodeInfo node:nodes())if(node.isVisibleToUser()&&named.test(node))visible.add(node);
+        require(visible.size()<=1,"Ambiguous original document action; no input sent");
+        if(visible.isEmpty())clickMenu("More actions");
+        else require(visible.get(0).isEnabled()&&visible.get(0).isClickable(),"Original document action is disabled; no toggle or action sent");
+        // Cancelling the review can leave this actual document menu open.
+        // Observe its original action before deciding whether one opening tap is needed.
+        Predicate<AccessibilityNodeInfo> ready = n -> named.test(n)&&n.isEnabled()&&n.isClickable();
+        AccessibilityNodeInfo original=waitNode(ready,"owned document action: "+wanted);activate(original,ready);
     }
 
     private void localFileButton(String wanted) {

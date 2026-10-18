@@ -379,7 +379,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery','file-actions','note-search'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery','file-actions','file-actions-remaining','note-search'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -470,7 +470,7 @@ class Probe:
                     require(len(lines) == 2 and lines[0].startswith('ORIGINAL_NOTE_SEARCH_DATA_OK ')
                         and lines[1].split() == [digest(x) for x in (SEED, ORIGINAL, CONTROL)],
                         'Original search driver fixture data differs')
-                if getattr(self.args, 'scope', '') == 'file-actions':
+                if getattr(self.args, 'scope', '') in ('file-actions','file-actions-remaining'):
                     self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,
                         '-d', checks, root.parent / 'android-runtime-tests/OriginalFileActionsCheck.java'])
                     observed = self.command(['java', '-Xmx64m', '-cp', str(classes) + os.pathsep + str(checks),
@@ -805,7 +805,7 @@ class Probe:
             if getattr(getattr(self,'args',None),'scope',None) == 'note-search':
                 from android_note_search_probe import PATHS
                 owned_names = PATHS
-            if getattr(getattr(self,'args',None),'scope',None) == 'file-actions':
+            if getattr(getattr(self,'args',None),'scope',None) in ('file-actions','file-actions-remaining'):
                 owned_names = ('fileops-original.md', 'fileops-original.canvas', 'fileops/资料😀.md', 'fileops/资料😀.canvas')
             for name in owned_names:
                 try:
@@ -1123,7 +1123,7 @@ class Probe:
             from android_note_search_probe import run_note_search
             run_note_search(self)
             return
-        if self.args.scope == 'file-actions':
+        if self.args.scope in ('file-actions','file-actions-remaining'):
             from android_file_actions_probe import run_file_actions
             run_file_actions(self)
             return
@@ -1257,7 +1257,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions','note-search'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions','file-actions-remaining','note-search'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

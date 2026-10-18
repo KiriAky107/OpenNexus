@@ -58,6 +58,13 @@ public final class OriginalFileActionsCheck {
         need(!OriginalFileActions.reviewedConflict(true,"android.view.View","REVISION_CONFLICT recovered","",false));
         need(!OriginalFileActions.reviewedConflict(true,"android.view.View",new String(new char[513]).replace('\0','x')+" REVISION_CONFLICT","",false));
         need(!OriginalFileActions.reviewedConflict(true,"android.view.View",null,null,false));
+        need(OriginalFileActions.documentAction(true,"android.widget.Button","Rename","","Rename"));
+        need(OriginalFileActions.documentAction(true,"android.widget.Button","Delete","","Delete"));
+        need(!OriginalFileActions.documentAction(true,"android.widget.Button","Delete selected","","Delete"));
+        need(!OriginalFileActions.documentAction(true,"android.app.Dialog","Delete","","Delete"));
+        need(!OriginalFileActions.documentAction(false,"android.widget.Button","Delete","","Delete"));
+        need(!OriginalFileActions.documentAction(true,"android.widget.Button","Delete","","Copy"));
+        need(!OriginalFileActions.documentAction(true,"android.widget.Button",null,null,null));
         System.out.println("ORIGINAL_FILE_ACTIONS_DATA_OK "+count);
         System.out.println(hash(OriginalFileActions.BODY)+" "+hash(OriginalFileActions.UPDATED)+" "+hash(OriginalFileActions.NODE));
     }

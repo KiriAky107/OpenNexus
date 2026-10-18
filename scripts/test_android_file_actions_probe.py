@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from android_file_actions_probe import BODY, UPDATED, NODE, changed_content, committed, frozen, intent, paths, snapshot
+from android_file_actions_probe import BODY, UPDATED, NODE, changed_content, committed, frozen, intent, paths, snapshot, file_steps
 from android_runtime_probe import Probe
 
 FILE = '11111111-1111-4111-8111-111111111111'
@@ -20,6 +20,16 @@ OP = '22222222-2222-4222-8222-222222222222'
 
 
 class FileActionBoundaries(unittest.TestCase):
+    def test_remaining_MD_skips_passed_rename_but_keeps_actual_new_delete_cancel_and_cold(self):
+        self.assertEqual(file_steps('md',True),('seed-renamed','renamed-cold','delete-cancel-preview','delete-cancel','delete-preview','delete-apply','deleted-cold'))
+        self.assertNotIn('rename-old',file_steps('md',True))
+        self.assertIn('rename-old',file_steps('canvas',True))
+        self.assertEqual(file_steps('canvas',True),file_steps('canvas',False))
+        self.assertEqual(file_steps('md',False),file_steps('canvas',False))
+    def test_remaining_selection_requires_original_type_and_explicit_boolean(self):
+        for kind,remaining in [('png',True),('md',1),('canvas','true')]:
+            with self.assertRaises(RuntimeError):file_steps(kind,remaining)
+
     def test_original_creation_intent_keeps_null_file_ID_while_receipt_binds_the_saved_file(self):
         with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory); tools = root / 'tools'; tools.mkdir(); output = root / 'evidence'; output.mkdir()

@@ -16,13 +16,21 @@ UPDATED = BODY.replace(b'\n', b'\r\n') + '并发更改必须经新审阅 / prese
 NODE = '本地画布原节点 😀 / retained node'
 STEPS = ('seed', 'rename-old', 'reject-old', 'cancel-old', 'reopen', 'rename-new',
          'rename-apply', 'renamed-cold', 'delete-cancel-preview', 'delete-cancel',
-         'delete-preview', 'delete-apply', 'deleted-cold')
+         'delete-preview', 'delete-apply', 'deleted-cold', 'seed-renamed')
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 
 def paths(kind):
     require(kind in ('md', 'canvas'), 'Unsafe owned local file kind')
     return 'fileops-original.' + kind, 'fileops/资料😀.' + kind
+
+
+def file_steps(kind, remaining):
+    paths(kind)
+    require(type(remaining) is bool, 'Explicit file component selection required')
+    if remaining and kind == 'md':
+        return ('seed-renamed', 'renamed-cold', 'delete-cancel-preview', 'delete-cancel', 'delete-preview', 'delete-apply', 'deleted-cold')
+    return tuple(step for step in STEPS if step != 'seed-renamed')
 
 
 def changed_content(kind, original):
@@ -145,7 +153,7 @@ def snapshot(probe, kind, label, file_id=None):
 
 def intent(probe, kind, step, **details):
     require_hosted_emulator(probe.args.serial)
-    require(probe.args.scope == 'file-actions' and step in (*STEPS, 'external-owned-change'), 'Explicit own file action required')
+    require(probe.args.scope in ('file-actions', 'file-actions-remaining') and step in (*STEPS, 'external-owned-change'), 'Explicit own file action required')
     original, renamed = paths(kind)
     data = {'run_id': os.environ['GITHUB_RUN_ID'], 'tools_source': probe.args.tools_commit,
             'compiled_source': probe.args.commit, 'kind': kind, 'step': step, 'original': original,
@@ -155,10 +163,21 @@ def intent(probe, kind, step, **details):
         output.flush(); os.fsync(output.fileno())
 
 
+def owned_concurrent_change(probe, kind, target, original, updated, reviewed_operation):
+    require(target in paths(kind), 'Unrelated concurrent file target')
+    intent(probe, kind, 'external-owned-change', original_operation_id=reviewed_operation, target_path=target,
+           before_sha256=hashlib.sha256(original).hexdigest(), content_sha256=hashlib.sha256(updated).hexdigest(),
+           explicitly_owned_filesystem_concurrency_not_GUI_input=True)
+    require(probe.original(target) == original, 'Own source changed before the declared concurrency action')
+    probe.device('shell', '-T', shlex.join(('run-as', APP, 'sh', '-c', 'cat > ' + shlex.quote(probe.root + 'vault/' + target))), input=updated)
+    require(probe.original(target) == updated, 'Declared own concurrency bytes differ')
+
+
 def run_file_actions(probe):
     require_hosted_emulator(probe.args.serial)
-    require(probe.args.scope == 'file-actions', 'Local file action scope must be explicit')
-    proof = {'passed': False, 'scope': 'file-actions', 'run_id': os.environ['GITHUB_RUN_ID'],
+    require(probe.args.scope in ('file-actions', 'file-actions-remaining'), 'Local file action scope must be explicit')
+    remaining = probe.args.scope == 'file-actions-remaining'
+    proof = {'passed': False, 'scope': probe.args.scope, 'run_id': os.environ['GITHUB_RUN_ID'],
              'tools_source': probe.args.tools_commit, 'compiled_source': probe.args.commit,
              'APK_sha256': probe.binding['sha256'], 'cases': {},
              'physical_phone_or_write_interruption_or_full_A2_A3C_verified': False}
@@ -167,51 +186,62 @@ def run_file_actions(probe):
         for kind in ('md', 'canvas'):
             result = {'passed': False, 'phase': 'seed', 'cold_processes': []}; proof['cases'][kind] = result
             original, renamed = paths(kind)
+            delete_only = remaining and kind == 'md'
+            planned = file_steps(kind, remaining); executed = []
+            result['intended_steps'] = list(planned)
+            result['MD_rename_exercised_in_this_fixture'] = not delete_only if kind == 'md' else False
             def phase(step, *, operation_id=None):
+                require(len(executed) < len(planned) and step == planned[len(executed)], 'Original remaining file phase changed or repeated')
                 result['phase'] = step
                 cold = step in ('reopen', 'renamed-cold', 'deleted-cold')
                 old_pid = probe.shell('pidof', APP).stdout.strip() if cold else None
                 intent(probe, kind, step, original_operation_id=operation_id)
                 probe.phase('files-' + kind + '-' + step,
-                            continue_process=step not in ('seed', 'reopen', 'renamed-cold', 'deleted-cold'), keep_running=True)
+                            continue_process=step not in ('seed', 'seed-renamed', 'reopen', 'renamed-cold', 'deleted-cold'), keep_running=True)
                 if cold:
                     new_pid = probe.shell('pidof', APP).stdout.strip()
                     require(re.fullmatch(rb'[1-9][0-9]{0,9}', old_pid) and re.fullmatch(rb'[1-9][0-9]{0,9}', new_pid)
                             and old_pid != new_pid, 'Own local file cold process was not replaced')
                     result['cold_processes'].append({'step': step, 'before': int(old_pid), 'after': int(new_pid)})
-                return snapshot(probe, kind, 'files-' + kind + '-' + step, result.get('file_id'))
-            seed = phase('seed'); raw = probe.original(original)
+                observed = snapshot(probe, kind, 'files-' + kind + '-' + step, result.get('file_id'))
+                executed.append(step); result['executed_steps'] = list(executed)
+                return observed
+            seed_target = renamed if delete_only else original
+            seed = phase('seed-renamed' if delete_only else 'seed'); raw = probe.original(seed_target)
             require(len(seed['files']) == 1 and not seed['mutations'], 'Local seed file is not unique')
             result['file_id'] = seed['files'][0]['id']
-            require(seed['files'][0]['path'] == original and seed['files'][0]['hash'] == hashlib.sha256(raw).hexdigest()
+            require(seed['files'][0]['path'] == seed_target and seed['files'][0]['hash'] == hashlib.sha256(raw).hexdigest()
                     and seed['saves'][0]['state'] == 'committed', 'Original GUI seed was not saved')
             updated = changed_content(kind, raw)
-            old = phase('rename-old')
-            review = frozen(old, (probe.output / ('files-' + kind + '-rename-old.log')).read_text('utf-8'), kind, raw, 'rename', renamed)
-            intent(probe, kind, 'external-owned-change', original_operation_id=review['operation_id'],
-                   before_sha256=hashlib.sha256(raw).hexdigest(), content_sha256=hashlib.sha256(updated).hexdigest(),
-                   explicitly_owned_filesystem_concurrency_not_GUI_input=True)
-            require(probe.original(original) == raw, 'Own source changed before the declared concurrency action')
-            probe.device('shell', '-T', shlex.join(('run-as', APP, 'sh', '-c', 'cat > ' + shlex.quote(probe.root + 'vault/' + original))), input=updated)
-            require(probe.original(original) == updated, 'Declared own concurrency bytes differ')
-            rejected = phase('reject-old', operation_id=review['operation_id'])
-            frozen(rejected, (probe.output / ('files-' + kind + '-reject-old.log')).read_text('utf-8'), kind, raw,
-                   'rename', renamed, state='rejected', expected_id=review['operation_id'])
-            require(next(x for x in rejected['mutations'] if x['operation_id'] == review['operation_id'])['error'] == 'REVISION_CONFLICT',
-                    'Old frozen action was not rejected as the actual concurrent content change')
-            cancelled = phase('cancel-old', operation_id=review['operation_id'])
-            require(next(x for x in cancelled['mutations'] if x['operation_id'] == review['operation_id'])['state'] == 'cancelled'
-                    and not any(x['operation_id'] == review['operation_id'] for x in cancelled['operations']), 'Rejected own action executed on cancellation')
-            phase('reopen'); require(probe.original(original) == updated, 'Cold open rewrote concurrent original bytes')
-            fresh = phase('rename-new')
-            rename = frozen(fresh, (probe.output / ('files-' + kind + '-rename-new.log')).read_text('utf-8'), kind, updated, 'rename', renamed)
-            require(rename['operation_id'] != review['operation_id'] and rename['file_id'] == result['file_id'], 'New review replaced original file identity')
-            renamed_state = phase('rename-apply', operation_id=rename['operation_id'])
-            result['rename'] = committed(renamed_state, rename, updated, deleted=False)
-            require(probe.original(renamed) == updated, 'Rename changed original bytes')
-            require(probe.shell('run-as', APP, 'test', '!', '-e', probe.root + 'vault/' + original, check=False).returncode == 0, 'Old local path still exists')
-            cold = phase('renamed-cold'); require(committed(cold, rename, updated, deleted=False) == result['rename']
-                    and cold['operations'] == renamed_state['operations'] and cold['outbox'] == renamed_state['outbox'], 'Cold rename replayed an original action')
+            if delete_only:
+                owned_concurrent_change(probe, kind, renamed, raw, updated, None)
+                cold = phase('renamed-cold')
+                require(cold['files'][0]['id'] == result['file_id'] and cold['files'][0]['path'] == renamed
+                        and probe.original(renamed) == updated, 'Fresh direct-destination MD original changed before deletion')
+                result['original_creation_operation_id'] = seed['saves'][0]['operation_id']
+                result['old_rename_component_not_replayed'] = True
+            else:
+                old = phase('rename-old')
+                review = frozen(old, (probe.output / ('files-' + kind + '-rename-old.log')).read_text('utf-8'), kind, raw, 'rename', renamed)
+                owned_concurrent_change(probe, kind, original, raw, updated, review['operation_id'])
+                rejected = phase('reject-old', operation_id=review['operation_id'])
+                frozen(rejected, (probe.output / ('files-' + kind + '-reject-old.log')).read_text('utf-8'), kind, raw,
+                       'rename', renamed, state='rejected', expected_id=review['operation_id'])
+                require(next(x for x in rejected['mutations'] if x['operation_id'] == review['operation_id'])['error'] == 'REVISION_CONFLICT',
+                        'Old frozen action was not rejected as the actual concurrent content change')
+                cancelled = phase('cancel-old', operation_id=review['operation_id'])
+                require(next(x for x in cancelled['mutations'] if x['operation_id'] == review['operation_id'])['state'] == 'cancelled'
+                        and not any(x['operation_id'] == review['operation_id'] for x in cancelled['operations']), 'Rejected own action executed on cancellation')
+                phase('reopen'); require(probe.original(original) == updated, 'Cold open rewrote concurrent original bytes')
+                fresh = phase('rename-new')
+                rename = frozen(fresh, (probe.output / ('files-' + kind + '-rename-new.log')).read_text('utf-8'), kind, updated, 'rename', renamed)
+                require(rename['operation_id'] != review['operation_id'] and rename['file_id'] == result['file_id'], 'New review replaced original file identity')
+                renamed_state = phase('rename-apply', operation_id=rename['operation_id'])
+                result['rename'] = committed(renamed_state, rename, updated, deleted=False)
+                require(probe.original(renamed) == updated, 'Rename changed original bytes')
+                require(probe.shell('run-as', APP, 'test', '!', '-e', probe.root + 'vault/' + original, check=False).returncode == 0, 'Old local path still exists')
+                cold = phase('renamed-cold'); require(committed(cold, rename, updated, deleted=False) == result['rename']
+                        and cold['operations'] == renamed_state['operations'] and cold['outbox'] == renamed_state['outbox'], 'Cold rename replayed an original action')
             preview = phase('delete-cancel-preview')
             cancelled_delete = frozen(preview, (probe.output / ('files-' + kind + '-delete-cancel-preview.log')).read_text('utf-8'), kind, updated, 'delete', '')
             cancelled = phase('delete-cancel', operation_id=cancelled_delete['operation_id'])
@@ -232,8 +262,11 @@ def run_file_actions(probe):
                     and cold['mutations'] == deleted['mutations'] and cold['operations'] == deleted['operations']
                     and cold['outbox'] == deleted['outbox'], 'Cold deletion resurrected or repeated an original operation')
             require(probe.shell('run-as', APP, 'test', '!', '-e', probe.root + 'vault/' + renamed, check=False).returncode == 0, 'Cold deletion path returned')
+            require(tuple(executed) == planned, 'Original local file steps incomplete')
             result.update(passed=True, original_sha256=hashlib.sha256(raw).hexdigest(), retained_sha256=hashlib.sha256(updated).hexdigest(),
-                          rejected_original_operation_id=review['operation_id'], cancelled_delete_operation_id=cancelled_delete['operation_id'])
+                          cancelled_delete_operation_id=cancelled_delete['operation_id'])
+            if not delete_only:
+                result['rejected_original_operation_id'] = review['operation_id']
         proof['passed'] = True
     except Exception as error:
         proof['failure_class'] = type(error).__name__

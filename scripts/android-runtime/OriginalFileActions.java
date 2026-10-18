@@ -13,7 +13,7 @@ final class OriginalFileActions {
     static final String DIRECTORY = "fileops";
     static final String[] STEPS = {"seed", "rename-old", "reject-old", "cancel-old", "reopen",
         "rename-new", "rename-apply", "renamed-cold", "delete-cancel-preview", "delete-cancel",
-        "delete-preview", "delete-apply", "deleted-cold"};
+        "delete-preview", "delete-apply", "deleted-cold", "seed-renamed"};
 
     static String kind(String phase) {
         for (String kind : new String[]{"md", "canvas"}) {
@@ -48,6 +48,11 @@ final class OriginalFileActions {
     private static boolean conflictText(String value) {
         return value != null && value.length() <= 512 && (value.equals("REVISION_CONFLICT")
             || value.endsWith(" REVISION_CONFLICT") || value.endsWith("\nREVISION_CONFLICT"));
+    }
+
+    static boolean documentAction(boolean owned, String role, String text, String description, String wanted) {
+        return owned && ("Rename".equals(wanted) || "Delete".equals(wanted))
+            && "android.widget.Button".equals(role) && (wanted.equals(text) || wanted.equals(description));
     }
 
     static String unique(String text, String regex) {
