@@ -379,7 +379,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery','file-actions'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -459,6 +459,17 @@ class Probe:
                         'cc.kronecker.opennexus.testdriver.OriginalCanvasPropertyCheck']).stdout
                     (self.output / 'driver-original-canvas-property.txt').write_bytes(observed)
                     require(observed.startswith(b'ORIGINAL_CANVAS_PROPERTY_OK '), 'Original Canvas property admission failed')
+                if getattr(self.args, 'scope', '') == 'file-actions':
+                    self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,
+                        '-d', checks, root.parent / 'android-runtime-tests/OriginalFileActionsCheck.java'])
+                    observed = self.command(['java', '-Xmx64m', '-cp', str(classes) + os.pathsep + str(checks),
+                        'cc.kronecker.opennexus.testdriver.OriginalFileActionsCheck']).stdout
+                    (self.output / 'driver-original-file-actions.txt').write_bytes(observed)
+                    from android_file_actions_probe import BODY as file_body, UPDATED as file_updated, NODE as file_node
+                    lines = observed.decode('ascii', 'strict').splitlines()
+                    require(len(lines) == 2 and lines[0].startswith('ORIGINAL_FILE_ACTIONS_DATA_OK ')
+                        and lines[1].split() == [digest(x) for x in (file_body, file_updated, file_node.encode())],
+                        'Original local file driver fixture data differs')
             self.command([sdk_tools / 'd8', '--lib', platform, '--min-api', '24', '--output', dex,
                 *sorted(classes.rglob('*.class'))])
             unsigned, aligned, signed = [build / part for part in ('unsigned.apk', 'aligned.apk', name + '.apk')]
@@ -780,6 +791,8 @@ class Probe:
                 owned_names = ('runtime-long.md',)
             if getattr(getattr(self,'args',None),'scope',None) == 'storage-recovery':
                 owned_names = ('full-area/original.md',)
+            if getattr(getattr(self,'args',None),'scope',None) == 'file-actions':
+                owned_names = ('fileops-original.md', 'fileops-original.canvas', 'fileops/资料😀.md', 'fileops/资料😀.canvas')
             for name in owned_names:
                 try:
                     value = self.original(name)
@@ -1092,6 +1105,10 @@ class Probe:
 
     def run(self):
         self.boot()
+        if self.args.scope == 'file-actions':
+            from android_file_actions_probe import run_file_actions
+            run_file_actions(self)
+            return
         if self.args.scope == 'storage-recovery':
             from android_storage_probe import run_storage_recovery
             run_storage_recovery(self)
@@ -1222,7 +1239,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

@@ -50,6 +50,33 @@ public final class RuntimeProbe extends Instrumentation {
             CompositionIme.attach(getContext());
             String phase = arguments.getString("phase", "");
             switch (phase) {
+                case "files-md-seed":
+                case "files-md-rename-old":
+                case "files-md-reject-old":
+                case "files-md-cancel-old":
+                case "files-md-reopen":
+                case "files-md-rename-new":
+                case "files-md-rename-apply":
+                case "files-md-renamed-cold":
+                case "files-md-delete-cancel-preview":
+                case "files-md-delete-cancel":
+                case "files-md-delete-preview":
+                case "files-md-delete-apply":
+                case "files-md-deleted-cold":
+                case "files-canvas-seed":
+                case "files-canvas-rename-old":
+                case "files-canvas-reject-old":
+                case "files-canvas-cancel-old":
+                case "files-canvas-reopen":
+                case "files-canvas-rename-new":
+                case "files-canvas-rename-apply":
+                case "files-canvas-renamed-cold":
+                case "files-canvas-delete-cancel-preview":
+                case "files-canvas-delete-cancel":
+                case "files-canvas-delete-preview":
+                case "files-canvas-delete-apply":
+                case "files-canvas-deleted-cold":
+                    localFileActions(phase); break;
                 case "storage-init": waitLabel("Start writing"); break;
                 case "storage-seed":
                 case "storage-fail":
@@ -543,6 +570,87 @@ public final class RuntimeProbe extends Instrumentation {
             require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()), OriginalStorageScenario.UPDATED),
                 "Actual cold original storage note differs");
         }
+    }
+
+    private void localFileActions(String phase) throws Exception {
+        String kind=OriginalFileActions.kind(phase), step=phase.substring(("files-"+kind+"-").length());
+        boolean canvas=kind.equals("canvas");
+        if (step.equals("seed")) {
+            create(canvas?"New canvas":"New note",OriginalFileActions.original(kind));
+            if (canvas) {
+                click("Text",false);
+                setText(editable("New text"),OriginalFileActions.NODE);
+                click("Collapse right sidebar",false);
+            } else inputText(noteBody(),OriginalFileActions.BODY);
+            save();
+        } else if (step.equals("rename-old") || step.equals("rename-new")) {
+            hideKeyboard();
+            clickMenu(canvas?"More canvas actions":"More actions");
+            click("Rename",false);
+            setText(waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+                && label(node,"Note path",false), "original reviewed rename path"),OriginalFileActions.destination(kind));
+            hideKeyboard();
+            click("Review action",false);
+            waitLabel("Awaiting confirmation");
+            recordLocalFileFreeze();
+        } else if (step.equals("reject-old")) {
+            waitLabel("Awaiting confirmation");
+            click("Apply reviewed action",false); // One old frozen action only.
+            waitLabel("REVISION_CONFLICT");
+            click("Check original result",false); // Read, never execute again.
+            waitLabel("Requires a new review");
+            recordLocalFileFreeze();
+        } else if (step.equals("cancel-old") || step.equals("delete-cancel")) {
+            click("Cancel",false);
+            waitLabel("Back");
+            waitNode(node -> label(node,"Save",false) && !node.isEnabled(), "original clean editor after cancellation");
+        } else if (step.equals("rename-apply") || step.equals("delete-apply")) {
+            waitLabel("Awaiting confirmation");
+            click("Apply reviewed action",false);
+            waitLabel("Completed");
+        } else if (step.equals("delete-cancel-preview") || step.equals("delete-preview")) {
+            clickMenu(canvas?"More canvas actions":"More actions");
+            click("Delete",false);
+            waitLabel("Awaiting confirmation");
+            recordLocalFileFreeze();
+        } else if (step.equals("reopen") || step.equals("renamed-cold")) {
+            clickTitleBar("Files");
+            if (step.equals("renamed-cold")) {
+                AccessibilityNodeInfo folder=waitNode(node -> label(node,OriginalFileActions.DIRECTORY,false)
+                    && node.isEnabled() && fileDrawerRow(node), "owned renamed file directory");
+                activate(folder,this::fileDrawerRow);
+            }
+            String name=step.equals("reopen")?OriginalFileActions.original(kind):"资料😀."+kind;
+            AccessibilityNodeInfo file=waitNode(node -> label(node,name,false) && node.isEnabled()
+                && fileDrawerRow(node), "owned original local file leaf");
+            activate(file,this::fileDrawerRow);
+            waitNode(node -> APP.equals(string(node.getPackageName())) && !node.isClickable()
+                && label(node,name,false) && titleBarControl(node), "opened original local file title");
+            if (canvas) waitLabel(OriginalFileActions.NODE);
+            else require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()).replace("\r\n","\n"),
+                    OriginalFileActions.UPDATED.replace("\r\n","\n")), "Original local Markdown UI differs after reopening");
+        } else {
+            require(step.equals("deleted-cold"), "Unknown owned file action");
+            waitLabel("Start writing");
+            clickTitleBar("Files");
+            settleUi();
+            require(!visibleLabel(OriginalFileActions.original(kind)) && !visibleLabel("资料😀."+kind),
+                "Deleted own file is still in the fresh root listing");
+        }
+    }
+
+    private void recordLocalFileFreeze() {
+        waitLabel("Original operation"); waitLabel("Saved version");
+        StringBuilder text=new StringBuilder();
+        for (AccessibilityNodeInfo node:nodes()) {
+            if (APP.equals(string(node.getPackageName())) && node.isVisibleToUser()) {
+                text.append(string(node.getText())).append('\n');
+                require(text.length()<=32768,"Original local review AX exceeds its bound");
+            }
+        }
+        String operation=OriginalFileActions.operation(text.toString());
+        String expected=OriginalFileActions.expected(text.toString());
+        progress.append("ORIGINAL_FILE_FREEZE ").append(operation).append(' ').append(expected).append('\n');
     }
 
     private void originalProductPairPhase(String phase) throws Exception {
