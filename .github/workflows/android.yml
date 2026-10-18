@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, storage-recovery, file-actions, file-actions-remaining, canvas-file-delete, note-search, canvas-graph, canvas-graph-remaining, offline-pending, offline-pending-final, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, desktop-pair, build-only]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, storage-recovery, write-interruption, file-actions, file-actions-remaining, canvas-file-delete, note-search, canvas-graph, canvas-graph-remaining, offline-pending, offline-pending-final, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, desktop-pair, build-only]
         default: all
         required: false
       sync_cold_originals:
@@ -115,7 +115,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'canvas-file-delete' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'canvas-graph-remaining' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'offline-pending-final' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'write-interruption' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'canvas-file-delete' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'canvas-graph-remaining' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'offline-pending-final' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -224,7 +224,7 @@ jobs:
           import os,re
           run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
           scope=os.environ['RUNTIME_SCOPE']
-          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts')
+          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts')
           assert scope=='all' or bool(run), 'Partial scope requires a fixed existing APK; it is not full acceptance'
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
@@ -320,6 +320,24 @@ jobs:
       - name: Check bounded filesystem ownership and original recovery invariants
         if: env.OWNED_RUNTIME_SCOPE == 'storage-recovery'
         run: python3 -m unittest discover -s scripts -p test_android_storage_probe.py -v
+      - name: Check original OS-interruption and receipt boundaries
+        if: env.OWNED_RUNTIME_SCOPE == 'write-interruption'
+        run: python3 -m unittest discover -s scripts -p test_android_atomic_probe.py -v
+      - name: Prepare the pinned same-UID observer compiler
+        if: env.OWNED_RUNTIME_SCOPE == 'write-interruption'
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
+          if [[ ! -x "$compiler" ]]; then
+            manager="$ANDROID_HOME/cmdline-tools/latest/bin"
+            if [[ -x "$manager/android" ]]; then
+              "$manager/android" --no-metrics --sdk="$ANDROID_HOME" sdk --ignore-outdated-xmls install ndk/30.0.16248370
+            else
+              "$manager/sdkmanager" --sdk_root="$ANDROID_HOME" --install 'ndk;30.0.16248370' </dev/null
+            fi
+          fi
+          test -x "$compiler"
       - name: Check bounded original nested-note search invariants
         if: env.OWNED_RUNTIME_SCOPE == 'note-search'
         run: python3 -m unittest discover -s scripts -p test_android_note_search_probe.py -v

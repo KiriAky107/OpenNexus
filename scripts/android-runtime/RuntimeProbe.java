@@ -97,7 +97,9 @@ public final class RuntimeProbe extends Instrumentation {
                 case "graph-undo": case "graph-redo": case "graph-delete":
                 case "graph-undo-delete": case "graph-redo-delete": case "graph-fit": case "graph-cold":
                     originalCanvasGraph(phase); break;
-                case "storage-init": waitLabel("Start writing"); break;
+                case "storage-init": case "atomic-init": waitLabel("Start writing"); break;
+                case "atomic-seed": case "atomic-edit": case "atomic-save": case "atomic-cold":
+                    originalAtomicWrite(phase); break;
                 case "storage-seed":
                 case "storage-fail":
                 case "storage-check":
@@ -589,6 +591,37 @@ public final class RuntimeProbe extends Instrumentation {
                 && label(node,"original.md",false) && titleBarControl(node), "opened original recovered document");
             require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()), OriginalStorageScenario.UPDATED),
                 "Actual cold original storage note differs");
+        }
+    }
+
+    private void originalAtomicWrite(String phase) throws Exception {
+        if(phase.equals("atomic-seed")) {
+            create("New note",OriginalAtomicWrite.PATH);inputText(noteBody(),OriginalAtomicWrite.ORIGINAL);save();
+        } else if(phase.equals("atomic-edit")) {
+            require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()),OriginalAtomicWrite.ORIGINAL),
+                "Original atomic seed is not open; no input sent");
+            inputText(noteBody(),OriginalAtomicWrite.UPDATED);waitLabel("Draft kept on this device");
+        } else if(phase.equals("atomic-save")) {
+            require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()),OriginalAtomicWrite.UPDATED),
+                "Original atomic pending body changed; no Save sent");
+            // The parent must deliberately interrupt this one invocation at
+            // the original OS replacement boundary. An ordinary success fails.
+            click("Save",false);
+            long until=SystemClock.uptimeMillis()+120_000;
+            while(SystemClock.uptimeMillis()<until&&!visibleLabel("Saved"))SystemClock.sleep(100);
+            require(visibleLabel("Saved"),"Original atomic Save did not complete; no retry sent");
+        } else {
+            require(phase.equals("atomic-cold"),"Unknown original atomic phase");clickTitleBar("Files");
+            AccessibilityNodeInfo folder=waitNode(node->label(node,"atomic-area",false)&&node.isEnabled()&&fileDrawerRow(node),"owned atomic directory");
+            activate(folder,this::fileDrawerRow);
+            AccessibilityNodeInfo file=waitNode(node->label(node,"original.md",false)&&node.isEnabled()&&fileDrawerRow(node),"owned atomic original");
+            activate(file,this::fileDrawerRow);
+            waitNode(node->APP.equals(string(node.getPackageName()))&&!node.isClickable()&&label(node,"original.md",false)
+                &&titleBarControl(node),"opened recovered atomic original");
+            if(visibleLabel("Completion is not yet confirmed.")) {
+                click("Check original result",false);waitLabel("Saved");
+            }
+            require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()),OriginalAtomicWrite.UPDATED),"Cold original atomic body differs");
         }
     }
 

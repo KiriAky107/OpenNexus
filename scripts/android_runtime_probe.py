@@ -379,7 +379,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -470,6 +470,15 @@ class Probe:
                     require(len(lines) == 2 and lines[0] == 'ORIGINAL_CANVAS_GRAPH_DATA_OK 69'
                         and lines[1].split() == [digest(x.encode()) for x in (PATH, SEED_A, SEED_B, TEXT, GROUP, FILE, URL, EDGE, *STEPS)],
                         'Original Canvas graph driver fixture data differs')
+                if getattr(self.args,'scope','')=='write-interruption':
+                    self.command(['javac','-J-Xmx256m','-encoding','UTF-8','-classpath',classes,
+                        '-d',checks,root.parent/'android-runtime-tests/OriginalAtomicWriteCheck.java'])
+                    observed=self.command(['java','-Xmx64m','-cp',str(classes)+os.pathsep+str(checks),
+                        'cc.kronecker.opennexus.testdriver.OriginalAtomicWriteCheck']).stdout
+                    (self.output/'driver-original-atomic-write.txt').write_bytes(observed)
+                    from android_atomic_probe import NOTE,ORIGINAL,UPDATED
+                    require(observed.decode('ascii').splitlines()==['ORIGINAL_ATOMIC_WRITE_DATA_OK',digest(NOTE.encode()),digest(ORIGINAL),digest(UPDATED)],
+                        'Original atomic write driver bytes differ')
                 if getattr(self.args, 'scope', '') == 'note-search':
                     self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,
                         '-d', checks, root.parent / 'android-runtime-tests/OriginalNoteSearchCheck.java'])
@@ -1133,6 +1142,10 @@ class Probe:
 
     def run(self):
         self.boot()
+        if self.args.scope=='write-interruption':
+            from android_atomic_probe import run_atomic
+            run_atomic(self)
+            return
         if self.args.scope in ('canvas-graph','canvas-graph-remaining'):
             from android_canvas_graph_probe import run_canvas_graph
             run_canvas_graph(self)
@@ -1275,7 +1288,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:
