@@ -43,3 +43,55 @@ it('closing the dialog after submitting preserves the background export',async()
  await flushPromises()
  expect(apiClient.post).not.toHaveBeenCalledWith('/api/exports/closing-job/cancel')
 })
+it('retains a newly acknowledged job when the opening list arrives with an older empty snapshot',async()=>{
+ vi.useFakeTimers()
+ let finish!:(value:unknown)=>void
+ vi.mocked(apiClient.get).mockReset().mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}) as never)
+ vi.mocked(apiClient.post).mockReset().mockResolvedValueOnce({job_id:'new-job',status:'queued',warnings:[],error:null,file:null})
+ const wrapper=mount(ExportDialog,{global:{stubs:{AppDialog:{template:'<div><slot /></div>'}}}})
+ try {
+  await flushPromises()
+  await wrapper.findAll('button').find(b=>b.text()==='开始导出')!.trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('new-job')
+  finish({items:[]});await flushPromises()
+  expect(wrapper.text()).toContain('new-job')
+  expect(apiClient.post).toHaveBeenCalledTimes(1)
+ } finally { wrapper.unmount() }
+})
+it('keeps a new job actionable when a prior periodic list returns after its submission',async()=>{
+ vi.useFakeTimers()
+ let finish!:(value:unknown)=>void
+ vi.mocked(apiClient.get).mockReset().mockResolvedValueOnce({items:[]})
+  .mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}) as never)
+ vi.mocked(apiClient.post).mockReset().mockResolvedValueOnce({job_id:'periodic-job',status:'queued',warnings:[],error:null,file:null})
+  .mockResolvedValue({status:'cancelled'})
+ const wrapper=mount(ExportDialog,{global:{stubs:{AppDialog:{template:'<div><slot /></div>'}}}})
+ try {
+  await flushPromises();await vi.advanceTimersByTimeAsync(1500)
+  await wrapper.findAll('button').find(b=>b.text()==='开始导出')!.trigger('click')
+  await flushPromises()
+  finish({items:[]});await flushPromises()
+  expect(wrapper.text()).toContain('periodic-job')
+  await wrapper.get('li button').trigger('click');await flushPromises()
+  expect(apiClient.post).toHaveBeenLastCalledWith('/api/exports/periodic-job/cancel')
+  expect(apiClient.post).toHaveBeenCalledTimes(2)
+ } finally { wrapper.unmount() }
+})
+it('uses the returned job status once without duplicating a job created during the list request',async()=>{
+ vi.useFakeTimers()
+ let finish!:(value:unknown)=>void
+ vi.mocked(apiClient.get).mockReset().mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}) as never)
+ vi.mocked(apiClient.post).mockReset().mockResolvedValueOnce({job_id:'same-job',status:'queued',warnings:[],error:null,file:null})
+ const wrapper=mount(ExportDialog,{global:{stubs:{AppDialog:{template:'<div><slot /></div>'}}}})
+ try {
+  await flushPromises()
+  await wrapper.findAll('button').find(b=>b.text()==='开始导出')!.trigger('click');await flushPromises()
+  finish({items:[{job_id:'same-job',status:'completed',warnings:[],error:null,file:{file_name:'latest.pdf',size:4}}]})
+  await flushPromises()
+  expect(wrapper.findAll('li')).toHaveLength(1)
+  expect(wrapper.text()).toContain('latest.pdf')
+  expect(wrapper.text()).toContain('已完成')
+  expect(wrapper.get('li button').text()).toBe('下载')
+ } finally { wrapper.unmount() }
+})

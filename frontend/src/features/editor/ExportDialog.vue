@@ -14,6 +14,7 @@ const visibleJobIds = new Set<string>()
 let initialized = false
 const labels = { queued: '排队中', running: '渲染中', completed: '已完成', failed: '失败', cancelled: '已取消' }
 async function refresh() {
+  const knownAtRequest = new Set(visibleJobIds)
   try {
     const value = await exportService.list()
     if (!initialized) {
@@ -21,7 +22,15 @@ async function refresh() {
       value.filter(job => ['queued','running'].includes(job.status)).forEach(job => visibleJobIds.add(job.id))
       initialized = true
     }
-    if (!disposed) jobs.value = value.filter(job => visibleJobIds.has(job.id))
+    if (!disposed) {
+      const listed = value.filter(job => visibleJobIds.has(job.id))
+      const listedIds = new Set(listed.map(job => job.id))
+      // An export can be acknowledged while this older list is in flight.
+      // Keep that handle actionable until a later list includes it; prefer
+      // the server's current status when this response already has the job.
+      const newer = jobs.value.filter(job => !knownAtRequest.has(job.id) && !listedIds.has(job.id))
+      jobs.value = [...newer, ...listed]
+    }
   } catch (e) { error.value = String(e) }
   if (!disposed) timer = setTimeout(refresh, 1500)
 }
