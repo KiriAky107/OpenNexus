@@ -186,6 +186,8 @@ def verify_platform_tls(apk, native_dir, abis, symbol_tool, origin_file):
 
 
 def package_identity(badging, *, package, version, version_code):
+    # SDK output is CRLF on Windows even when read as raw UTF-8 bytes.
+    badging = badging.replace('\r\n', '\n')
     match = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']*)'", badging, re.M)
     require(match is not None, 'ANDROID_PACKAGE_IDENTITY_MISSING')
     require(match.groups() == (package, str(version_code), version), 'ANDROID_PACKAGE_IDENTITY_MISMATCH')

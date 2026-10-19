@@ -152,6 +152,7 @@ def release_manifest(badging,xml,*,version,version_code,network_policy=None):
 
 def release_certificate(text,expected):
     require(isinstance(expected,str) and re.fullmatch(r'[0-9a-fA-F]{64}',expected),'ANDROID_RELEASE_CERTIFICATE_INVALID')
+    text=text.replace('\r\n','\n')
     fingerprints=re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$',text,re.M)
     require([v.lower() for v in fingerprints]==[expected.lower()],'ANDROID_RELEASE_CERTIFICATE_MISMATCH')
     require(re.search(r'^Verified using v2 scheme \(APK Signature Scheme v2\): true$',text,re.M),

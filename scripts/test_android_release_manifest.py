@@ -80,6 +80,13 @@ class AndroidReleaseManifestContracts(unittest.TestCase):
         for text in (SIGNATURE.replace(CERTIFICATE,'cd'*32),SIGNATURE+f'Signer #2 certificate SHA-256 digest: {CERTIFICATE}\n',SIGNATURE.replace(': true',': false')):
             with self.subTest(text=text),self.assertRaises(Exception):subject.release_certificate(text,CERTIFICATE)
 
+    def test_windows_signature_crlf_keeps_single_signer_and_v2_required(self):
+        windows=SIGNATURE.replace('\n','\r\n')
+        self.assertEqual(subject.release_certificate(windows,CERTIFICATE),CERTIFICATE)
+        for text in (windows+f'Signer #2 certificate SHA-256 digest: {CERTIFICATE}\r\n',
+                     windows.replace(': true',': false'),windows.replace(CERTIFICATE,'cd'*32)):
+            with self.subTest(text=text),self.assertRaises(Exception):subject.release_certificate(text,CERTIFICATE)
+
     def test_cli_inspection_uses_only_bounded_readers_and_keeps_runtime_gaps(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);apk=root/'owned.apk';apk.write_bytes(b'owned synthetic test fixture')

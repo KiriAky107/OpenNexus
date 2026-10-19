@@ -234,6 +234,17 @@ class AndroidPackageBindingTests(unittest.TestCase):
             with self.assertRaisesRegex(Exception, 'ANDROID_TARGET_SDK_MISMATCH'):
                 module.package_identity(invalid, **arguments)
 
+    def test_windows_sdk_crlf_retains_exact_sdk_and_duplicate_checks(self):
+        current = "package: name='cc.kronecker.opennexus' versionCode='1' versionName='0.1.0-dev1'\r\nminSdkVersion:'24'\r\ntargetSdkVersion:'36'\r\n"
+        arguments = dict(package='cc.kronecker.opennexus', version='0.1.0-dev1', version_code=1)
+        module.package_identity(current, **arguments)
+        for value in (current + "sdkVersion:'24'\r\n", current.replace("minSdkVersion:'24'", "minSdkVersion:'26'")):
+            with self.assertRaisesRegex(Exception, 'ANDROID_MIN_SDK_MISMATCH'):
+                module.package_identity(value, **arguments)
+        for value in (current + "targetSdkVersion:'36'\r\n", current.replace("targetSdkVersion:'36'", "targetSdkVersion:'35'")):
+            with self.assertRaisesRegex(Exception, 'ANDROID_TARGET_SDK_MISMATCH'):
+                module.package_identity(value, **arguments)
+
     def test_rejects_a_different_package_or_version_despite_valid_badging(self):
         badging = "package: name='cc.kronecker.opennexus.dev' versionCode='1' versionName='0.1.0-dev1'\nsdkVersion:'24'\ntargetSdkVersion:'36'\n"
         module.package_identity(badging, package='cc.kronecker.opennexus.dev', version='0.1.0-dev1', version_code=1)
