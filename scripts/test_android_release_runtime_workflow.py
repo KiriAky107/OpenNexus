@@ -67,6 +67,14 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         upload=next(s for s in steps if s.get('uses')=='actions/upload-artifact@v7')
         self.assertEqual(upload['if'],'always()');self.assertNotIn('driver-build',upload['with']['path'])
         self.assertIn('.build/android-release-runtime/evidence/',upload['with']['path'])
+        # Native host DB/WAL/SHM originals live under vault/.ainote. The action
+        # must retain those hidden paths as well as their snapshot manifest.
+        self.assertEqual(upload['with']['include-hidden-files'],'true')
+        self.assertEqual(upload['with']['path'].splitlines(),[
+            '.build/android-release-runtime/evidence/',
+            '.build/android-release-runtime/emulator.log',
+            '.build/android-release-runtime/emulator-version.txt',
+            '.build/android-release-runtime/cleanup.json'])
         self.assertNotIn('.p12',str(self.flow()));self.assertNotIn('sign_android_release.py',str(self.flow()))
 
 

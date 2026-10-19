@@ -120,5 +120,6 @@ jobs:
             .build/android-release-runtime/emulator.log
             .build/android-release-runtime/emulator-version.txt
             .build/android-release-runtime/cleanup.json
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
