@@ -5,7 +5,7 @@ This receipt never substitutes for intended-signer, device, upgrade or release p
 import argparse,hashlib,json,os,re,subprocess,tempfile,zipfile
 from pathlib import Path,PurePosixPath
 from android_release_native import same_runtime
-from check_android_release_manifest import release_manifest
+from check_android_release_manifest import release_manifest,inspect_network_policy
 from release_plan import atomic_json,build_source,digest,journal_lock,require
 from verify_android_package import (MACHINES,TLS_COORDINATE,TLS_UPSTREAM,TLS_ARTIFACTS,TLS_CLASSES,
     TLS_SYMBOL,FOREGROUND_SYMBOL,BROKER_SYMBOL,verify_mobile_files,verify_generated_mobile_files)
@@ -82,7 +82,8 @@ def inspect(root,commit,source_proof,apk,native_dir,sdk,abi):
     tools=sdk/'build-tools/36.0.0';suffix='.exe' if os.name=='nt' else '';aapt=tools/('aapt2'+suffix)
     def run(args):return subprocess.check_output([str(v) for v in args],timeout=90).decode('utf-8','strict')
     badging=run([aapt,'dump','badging',apk]);xml=run([aapt,'dump','xmltree','--file','AndroidManifest.xml',apk])
-    metadata=release_manifest(badging,xml,version=config['version'],version_code=config['bundle']['android']['versionCode'])
+    network_policy=inspect_network_policy(apk,aapt,xml)
+    metadata=release_manifest(badging,xml,version=config['version'],version_code=config['bundle']['android']['versionCode'],network_policy=network_policy)
     inventory=archive_inventory(apk,abi)
     files=verify_mobile_files(apk,run([aapt,'dump','permissions',apk]))
     required=TLS_CLASSES+['Lcc/kronecker/opennexus/MainActivity;','Lcc/kronecker/opennexus/sync/SyncCredentialStore;']
@@ -98,7 +99,7 @@ def inspect(root,commit,source_proof,apk,native_dir,sdk,abi):
     require(digest(apk)==original_hash and before==build_source(root,commit),'ANDROID_RELEASE_INPUT_CHANGED_DURING_VERIFY')
     return dict(schema=1,passed=True,kind='android-release-input',source_commit=commit,source_clean=True,
         source_proof=source_proof.name,apk=apk.name,apk_sha256=original_hash,apk_bytes=apk.stat().st_size,abi=abi,
-        metadata=metadata,inventory=inventory,native_library=native,platform_TLS_origin=origin,
+        metadata=metadata,inventory=inventory,native_library=native,platform_TLS_origin=origin,network_security_policy=network_policy,
         files_plugin={**files,'source_sha256':kotlin},R8_required_JVM_descriptors=required,
         zip_alignment_page_size_kib=16,raw_badging=badging,raw_manifest_xmltree=xml,raw_alignment=alignment,
         intended_signer_verified=False,actual_native_runtime_verified=False,upgrade_verified=False,
