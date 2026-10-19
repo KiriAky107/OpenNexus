@@ -64,10 +64,32 @@ class ReleaseWorkflowBoundaries(unittest.TestCase):
                 return ('owned-tool-blob:'+args[2]).encode()
             with patch('subprocess.check_output',side_effect=git):exec(compile(code,'real-tool-snapshot','exec'),{})
             root=Path(folder)/'opennexus-release-tools';value=json.loads((root/'tools-source.json').read_bytes())
-            self.assertEqual(value['tools_commit'],'a'*40);self.assertEqual(value['compiled_commit'],'b'*40);self.assertEqual(len(seen),9)
+            self.assertEqual(value['tools_commit'],'a'*40);self.assertEqual(value['compiled_commit'],'b'*40);self.assertEqual(len(seen),10)
             for name,digest in value['files_sha256'].items():self.assertEqual(hashlib.sha256((root/name).read_bytes()).hexdigest(),digest)
         freeze=next(s['run'] for s in steps if s.get('name')=='Freeze source before real release compilation')
         self.assertIn('--commit "$COMPILED_SHA"',freeze);self.assertIn('--repository-dir "$GITHUB_WORKSPACE"',freeze)
         self.assertNotIn('--debug',next(s['run'] for s in steps if s.get('name')=='Build stable identifier release APKs for both ABIs'))
+
+    def test_failed_original_collector_never_becomes_verified_input_or_uploads_a_key(self):
+        from collect_android_release_attempt import collect
+        steps=self.workflow()['jobs']['release-inputs']['steps']
+        failed=next(s for s in steps if s.get('name')=='Preserve original incomplete release outputs')
+        self.assertEqual(failed['if'],'failure()');self.assertNotIn('continue-on-error',failed)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);native=root/'.build/target';native.mkdir(parents=True)
+            apk=root/'frontend/mobile/src-tauri/gen/android/app/build/outputs/apk/arm64/release/original.apk'
+            apk.parent.mkdir(parents=True);apk.write_bytes(b'original incomplete APK, not executable')
+            (apk.parent/'private.p12').write_bytes(b'synthetic key must never be collected')
+            tools=root/'tools-source.json';tools.write_text(json.dumps(dict(schema=1,tools_commit='a'*40,
+                compiled_commit='b'*40,files_sha256={'collect_android_release_attempt.py':'c'*64})),'utf-8')
+            output=root/'.build/attempt'
+            result=collect(root,native,output,tools,'a'*40,'b'*40)
+            self.assertFalse(result['passed']);self.assertEqual(result['kind'],'android-release-attempt-not-verified')
+            self.assertTrue(result['no_signing_or_runtime_or_upgrade_or_publication_claim'])
+            self.assertEqual(result['original_APK_files'],1)
+            self.assertEqual((output/'apks/arm64/release/original.apk').read_bytes(),apk.read_bytes())
+            self.assertFalse(any(v.endswith('.p12') for v in result['files']))
+            self.assertTrue(all(v['source_bytes_stable'] for v in result['files'].values()))
+            with self.assertRaises(AssertionError):collect(root,native,output,tools,'a'*40,'b'*40)
 
 if __name__=='__main__':unittest.main()

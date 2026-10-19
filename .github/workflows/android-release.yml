@@ -63,7 +63,7 @@ jobs:
           root=Path(os.environ['RUNNER_TEMP'])/'opennexus-release-tools';root.mkdir()
           names=['release_plan.py','android_release_contract.py','verify_android_package.py','android_release_native.py',
               'check_android_release_manifest.py','verify_android_release_package.py','record-build-source.py',
-              'test_android_release_native.py','test_verify_android_release_package.py']
+              'test_android_release_native.py','test_verify_android_release_package.py','collect_android_release_attempt.py']
           items={}
           for name in names:
               raw=subprocess.check_output(['git','show',os.environ['GITHUB_SHA']+':scripts/'+name])
@@ -154,3 +154,17 @@ jobs:
           name: OpenNexus-android-release-input-${{ github.sha }}-${{ inputs.product_commit || github.sha }}
           path: .build/android-release-inputs/
           if-no-files-found: error
+      - name: Preserve original incomplete release outputs
+        if: failure()
+        run: >-
+          python3 "$RUNNER_TEMP/opennexus-release-tools/collect_android_release_attempt.py"
+          --root "$GITHUB_WORKSPACE" --native-dir "$CARGO_TARGET_DIR"
+          --output "$GITHUB_WORKSPACE/.build/android-release-attempt-originals"
+          --tools-source "$RUNNER_TEMP/opennexus-release-tools/tools-source.json"
+          --caller-commit "$GITHUB_SHA" --product-commit "$COMPILED_SHA"
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: OpenNexus-android-release-attempt-${{ github.sha }}-${{ inputs.product_commit || github.sha }}-${{ github.run_attempt }}
+          path: .build/android-release-attempt-originals/
+          if-no-files-found: warn
