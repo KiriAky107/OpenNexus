@@ -26,6 +26,7 @@ class Device:
         self.identity = deepcopy(IDENTITY)
         self.stopped = True
         self.package_dump = None
+        self.private_root = ROOT
         self.files = {ROOT + name: b'original-' + name.encode() for name in DATABASES}
         self.files[ROOT + 'vault/release-owned-original.md'] = b'# original\r\nChinese \xe4\xb8\xad\xe6\x96\x87\r\n'
         self.tamper = False
@@ -52,7 +53,7 @@ class Device:
                     'Packages:\n  Package [' + APP + '] (d454f40):\n    User 0: installed=true stopped='
                     + str(self.stopped).lower() + ' enabled=0\n\nQueries:\n  queryable via interaction:\n    User 0:\n').encode()
             elif cmd == ['find', '/data/user/0/' + APP, '-name', 'mobile-drafts.sqlite3', '-type', 'f']:
-                out = (ROOT + 'mobile-drafts.sqlite3\n').encode()
+                out = (self.private_root + 'mobile-drafts.sqlite3\n').encode()
             elif cmd[0] == 'test':
                 name = cmd[-1]; exists = name in self.files
                 rc = int(not (exists if cmd[1] in ('-e', '-f') else not exists if cmd[2] == '-e' else True))
@@ -82,7 +83,9 @@ class Boundaries(unittest.TestCase):
             StoppedReleaseObserver(Device(), 'phone-serial', Path(temp)/'out', ['release-owned-original.md'])
 
     def test_raw_paths_credentials_and_duplicate_fixtures_refused(self):
-        for root in ['/data/user/0/' + APP + '.dev/files/', ROOT + '../', ROOT + './', '/data/user/10/' + APP + '/files/', ROOT + 'bad//']:
+        for root in ['/data/user/0/' + APP + '.dev/', '/data/user/0/' + APP + '.dev/files/',
+                '/data/user/0/' + APP, ROOT + '../', ROOT + './', '/data/user/10/' + APP + '/',
+                '/data/user/10/' + APP + '/files/', ROOT + 'bad//']:
             with self.subTest(root=root), self.assertRaises(RuntimeError): admit_root(root)
         for files in [['../release-owned-x.md'], ['mobile-sync-auth.sqlite3'], ['release-owned-x.md']*2, [[]], ['release-owned-x.md/shadow']]:
             with self.subTest(files=files), self.assertRaises(RuntimeError): admit_files(files)
@@ -122,6 +125,33 @@ class Boundaries(unittest.TestCase):
             self.assertEqual(view.discover_data_root(), ROOT)
             device.active = True
             with self.assertRaisesRegex(RuntimeError, 'APP_NOT_STOPPED'): view.discover_data_root()
+
+    def test_android_data_directory_and_its_platform_alias_are_valid_own_roots(self):
+        # Tauri's Android app_data_dir resolves activity.dataDir itself, unlike
+        # desktop paths; it does not require an extra files/ component.
+        root = '/data/user/0/' + APP + '/'
+        for found in (root, root.replace('/data/user/0/', '/data/data/')):
+            with self.subTest(found=found), observer() as (view, device):
+                device.private_root = found
+                device.files = {name.replace(ROOT, root): raw for name, raw in device.files.items()}
+                view.start_root_observation()
+                self.assertEqual(view.discover_data_root(), root)
+                self.assertEqual(admit_root(root), root)
+                result = view.copy_stopped(root, 'bare-app-data')
+                self.assertTrue(result['app_stopped_before_and_after'])
+                self.assertFalse(result['credential_store_copied'])
+                self.assertEqual((view.output/'bare-app-data/mobile-drafts.sqlite3').read_bytes(), device.files[root+'mobile-drafts.sqlite3'])
+                self.assertEqual((view.output/'root-discovery.stdout').read_bytes(), (found+'mobile-drafts.sqlite3\n').encode())
+
+    def test_unrecognized_root_retains_original_discovery_without_reading_it(self):
+        for found in ('/data/user/10/'+APP+'/', '/data/user/0/'+APP+'.dev/'):
+            with self.subTest(found=found), observer() as (view, device):
+                device.private_root = found
+                view.start_root_observation()
+                with self.assertRaisesRegex(RuntimeError, 'EXACT_PRIVATE_ROOT'):
+                    view.discover_data_root()
+                self.assertEqual((view.output/'root-discovery.stdout').read_bytes(), (found+'mobile-drafts.sqlite3\n').encode())
+                self.assertFalse(any('cat ' + found in str(call) for call in device.calls))
 
     def test_absent_process_is_not_proof_scheduled_work_cannot_start(self):
         with observer() as (view, device):

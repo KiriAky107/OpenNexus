@@ -42,7 +42,7 @@ def admit_files(files):
 
 
 def admit_root(root):
-    require(type(root) is str and re.fullmatch(r'/data/user/0/cc\.kronecker\.opennexus/(?:[A-Za-z0-9_-]+/){1,5}', root),
+    require(type(root) is str and re.fullmatch(r'/data/user/0/cc\.kronecker\.opennexus/(?:[A-Za-z0-9_-]+/){0,5}', root),
         'RELEASE_OBSERVATION_EXACT_PRIVATE_ROOT')
     return root
 
@@ -151,7 +151,14 @@ class StoppedReleaseObserver:
 
     def discover_data_root(self):
         self.require_stopped()
-        raw = self.shell('find', '/data/user/0/' + APP, '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout
+        args = ('find', '/data/user/0/' + APP, '-name', 'mobile-drafts.sqlite3', '-type', 'f')
+        exclusive(self.output / 'root-discovery-intent.json', json.dumps(dict(arguments=args, read_only=True)).encode())
+        result = self.shell(*args, check=False)
+        exclusive(self.output / 'root-discovery.stdout', result.stdout)
+        exclusive(self.output / 'root-discovery.stderr', result.stderr)
+        exclusive(self.output / 'root-discovery-result.json', json.dumps(dict(returncode=result.returncode)).encode())
+        require(result.returncode == 0, 'RELEASE_OBSERVATION_ROOT_DISCOVERY_FAILED')
+        raw = result.stdout
         require(len(raw) <= 8192, 'RELEASE_OBSERVATION_ROOT_DISCOVERY_BOUND')
         paths = raw.decode('utf-8', 'strict').splitlines()
         require(len(paths) == 1 and paths[0].endswith('/mobile-drafts.sqlite3'),
