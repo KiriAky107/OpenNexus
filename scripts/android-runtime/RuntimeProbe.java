@@ -60,8 +60,9 @@ public class RuntimeProbe extends Instrumentation {
             info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                 | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             ui.setServiceInfo(info);
-            CompositionIme.attach(getContext(), APP);
             String phase = arguments.getString("phase", "");
+            require(ReleaseScene.identityMatches(stableRelease, phase), "Release phase requires the fixed stable driver identity");
+            CompositionIme.attach(getContext(), APP);
             switch (phase) {
                 case "motion-seed": case "motion-open": case "motion-move": case "motion-resize":
                 case "motion-pan": case "motion-pinch": case "motion-cancel": case "motion-takeover":
@@ -453,7 +454,8 @@ public class RuntimeProbe extends Instrumentation {
                     else { SystemClock.sleep(600); waitLabel("Saved"); }
                     break;
                 case "markdown-image":
-                    create("New note", "runtime-image.md");
+                case "release-image-markdown":
+                    create("New note", ReleaseScene.imageNote(stableRelease));
                     inputText(noteBody(), "# Original picker image\n");
                     hideKeyboard();
                     clickMenu("More actions");
@@ -464,14 +466,16 @@ public class RuntimeProbe extends Instrumentation {
                     save();
                     break;
                 case "markdown-image-reopen":
-                    open("runtime-image.md");
+                case "release-image-markdown-reopen":
+                    open(ReleaseScene.imageNote(stableRelease));
                     require(string(noteBody().getText()).contains("![](attachments/"), "System-selected original image reference missing after cold launch");
                     hideKeyboard();
                     clickMenu("More actions");
                     click("Read preview", false);
                     break;
                 case "canvas-image":
-                    create("New canvas", "runtime-image.canvas");
+                case "release-image-canvas":
+                    create("New canvas", ReleaseScene.imageCanvas(stableRelease));
                     clickMenu("More canvas actions");
                     click("Import original image", false);
                     chooseOriginalImage();
@@ -481,10 +485,12 @@ public class RuntimeProbe extends Instrumentation {
                     save();
                     break;
                 case "canvas-image-reopen":
-                    open("runtime-image.canvas");
+                case "release-image-canvas-reopen":
+                    open(ReleaseScene.imageCanvas(stableRelease));
                     waitOriginalImageNode();
                     break;
                 case "export":
+                case "release-content-export":
                     localDocumentAction("Export saved content");
                     click("Prepare content snapshot", false);
                     click("Choose save location", false);
