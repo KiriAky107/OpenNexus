@@ -54,6 +54,26 @@ def exclusive(path, raw):
         os.fsync(stream.fileno())
 
 
+def require_stopped_package(state):
+    """Read only this package's installed User0 state, not Queries headings."""
+    error = 'RELEASE_OBSERVATION_PACKAGE_NOT_FORCE_STOPPED'
+    require(type(state) is str and len(state) <= 1024 * 1024, error)
+    lines = state.splitlines()
+    sections = [i for i, line in enumerate(lines) if line == 'Packages:']
+    require(len(sections) == 1, error)
+    start = sections[0] + 1
+    end = next((i for i in range(start, len(lines)) if lines[i] and not lines[i][0].isspace()), len(lines))
+    headers = [(i, re.fullmatch(r'  Package \[([A-Za-z0-9_.]+)\] \([0-9a-f]+\):', lines[i]))
+               for i in range(start, end)]
+    headers = [(i, match.group(1)) for i, match in headers if match]
+    own = [i for i, name in headers if name == APP]
+    require(len(own) == 1, error)
+    begin = own[0] + 1
+    finish = next((i for i, _ in headers if i >= begin), end)
+    users = [line.strip() for line in lines[begin:finish] if re.match(r'^\s*User 0:', line)]
+    require(len(users) == 1 and re.findall(r'(?:^|\s)stopped=(\S+)', users[0]) == ['true'], error)
+
+
 class StoppedReleaseObserver:
     def __init__(self, device, serial, output, files):
         require_hosted_emulator(serial)
@@ -61,6 +81,7 @@ class StoppedReleaseObserver:
         self.files = admit_files(files)
         self.allowed = set(self.files) | {db + suffix for db in DATABASES for suffix in ('', '-wal', '-shm')}
         self.identity = None
+        self.stopped_checks = 0
         require(not self.output.exists(), 'RELEASE_OBSERVATION_ORIGINAL_OUTPUT_EXISTS')
         self.output.mkdir(parents=True)
 
@@ -100,16 +121,19 @@ class StoppedReleaseObserver:
         require(self.identity is not None and self.observe_identity() == self.identity,
             'RELEASE_OBSERVATION_OWNER_CHANGED')
         # Root sees all processes. Include the app's colon-suffixed service processes.
-        processes = self.text('ps', '-A', '-o', 'NAME').splitlines()
+        self.stopped_checks += 1
+        prefix = 'stopped-check-' + str(self.stopped_checks).zfill(4)
+        raw_processes = self.shell('ps', '-A', '-o', 'NAME').stdout
+        exclusive(self.output / (prefix + '-processes.txt'), raw_processes)
+        processes = raw_processes.decode('utf-8', 'strict').strip().splitlines()
         require(processes and processes[0].strip() == 'NAME'
             and not any(name == APP or name.startswith(APP + ':') for name in processes[1:]),
             'RELEASE_OBSERVATION_APP_NOT_STOPPED')
         # No process is insufficient: a scheduled worker could start mid-copy.
         # Refuse until the caller's explicit force-stop is visible for user0.
-        state = self.text('dumpsys', 'package', APP)
-        users = [line.strip() for line in state.splitlines() if re.match(r'^\s*User 0:', line)]
-        require(len(users) == 1 and re.search(r'(?:^| )stopped=true(?: |$)', users[0]),
-            'RELEASE_OBSERVATION_PACKAGE_NOT_FORCE_STOPPED')
+        raw_state = self.shell('dumpsys', 'package', APP).stdout
+        exclusive(self.output / (prefix + '-package.txt'), raw_state)
+        require_stopped_package(raw_state.decode('utf-8', 'strict'))
 
     def path(self, root, relative):
         admit_root(root)

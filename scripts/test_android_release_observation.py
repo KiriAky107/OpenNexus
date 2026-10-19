@@ -25,6 +25,7 @@ class Device:
         self.calls, self.rooted, self.active = [], False, False
         self.identity = deepcopy(IDENTITY)
         self.stopped = True
+        self.package_dump = None
         self.files = {ROOT + name: b'original-' + name.encode() for name in DATABASES}
         self.files[ROOT + 'vault/release-owned-original.md'] = b'# original\r\nChinese \xe4\xb8\xad\xe6\x96\x87\r\n'
         self.tamper = False
@@ -46,7 +47,10 @@ class Device:
             elif cmd == ['id', '-u']: out = b'0' if self.rooted else b'2000'
             elif cmd == ['ps', '-A', '-o', 'NAME']:
                 out = ('NAME\ninit\nadbd\n' + (APP + ':worker\n' if self.active else '')).encode()
-            elif cmd == ['dumpsys', 'package', APP]: out = ('  User 0: installed=true stopped=' + str(self.stopped).lower() + ' enabled=0\n').encode()
+            elif cmd == ['dumpsys', 'package', APP]:
+                out = (self.package_dump if self.package_dump is not None else
+                    'Packages:\n  Package [' + APP + '] (d454f40):\n    User 0: installed=true stopped='
+                    + str(self.stopped).lower() + ' enabled=0\n\nQueries:\n  queryable via interaction:\n    User 0:\n').encode()
             elif cmd == ['find', '/data/user/0/' + APP, '-name', 'mobile-drafts.sqlite3', '-type', 'f']:
                 out = (ROOT + 'mobile-drafts.sqlite3\n').encode()
             elif cmd[0] == 'test':
@@ -124,6 +128,48 @@ class Boundaries(unittest.TestCase):
             view.start_root_observation(); device.stopped = False
             with self.assertRaisesRegex(RuntimeError, 'PACKAGE_NOT_FORCE_STOPPED'): view.copy_stopped(ROOT, 'idle')
             self.assertFalse((view.output/'idle').exists())
+
+    def test_api36_query_user_heading_does_not_duplicate_package_state(self):
+        with observer() as (view, device):
+            view.start_root_observation()
+            # API36 dumpsys also emits a bare User0 under Queries. Only the
+            # installed package's state proves force-stop, not query visibility.
+            self.assertEqual(view.discover_data_root(), ROOT)
+            self.assertFalse(any('force-stop' in str(call) for call in device.calls))
+
+    def test_foreign_duplicate_or_ambiguous_user_state_cannot_admit_copy(self):
+        own = '  Package [' + APP + '] (d454f40):\n    User 0: installed=true stopped=true enabled=0\n'
+        other = '  Package [cc.kronecker.other] (b123):\n    User 0: stopped=true\n'
+        for text in [
+            'Packages:\n' + other,
+            'Packages:\n' + own.replace('stopped=true', 'stopped=false') + other,
+            'Packages:\n' + own + own,
+            'Packages:\n' + own + '    User 0: stopped=true\n',
+            'Packages:\n' + own.replace('stopped=true', 'stopped=false stopped=true'),
+            'Packages:\n' + own.replace('stopped=true', 'notstopped=true'),
+            'Packages:\n' + own.replace('User 0:', 'User 10:'),
+            'Queries:\n' + own,
+        ]:
+            with self.subTest(text=text), observer() as (view, device):
+                device.package_dump = text
+                view.start_root_observation()
+                with self.assertRaisesRegex(RuntimeError, 'PACKAGE_NOT_FORCE_STOPPED'):
+                    view.copy_stopped(ROOT, 'refused')
+                self.assertFalse((view.output/'refused').exists())
+                self.assertFalse(any('force-stop' in str(call) for call in device.calls))
+
+    def test_rejected_stop_check_retains_raw_state_and_never_reads_vault(self):
+        with observer() as (view, device):
+            view.start_root_observation()
+            device.stopped = False
+            with self.assertRaisesRegex(RuntimeError, 'PACKAGE_NOT_FORCE_STOPPED'):
+                view.copy_stopped(ROOT, 'not-stopped')
+            original = (view.output/'stopped-check-0001-package.txt').read_bytes()
+            self.assertIn(b'stopped=false', original)
+            self.assertIn(b'Queries:', original)
+            self.assertEqual((view.output/'stopped-check-0001-processes.txt').read_bytes(), b'NAME\ninit\nadbd\n')
+            self.assertFalse(any('mobile-drafts.sqlite3' in str(call) for call in device.calls))
+            self.assertFalse((view.output/'not-stopped').exists())
 
     def test_actual_synthetic_wal_rows_and_raw_bytes_are_retained(self):
         with observer() as (view, device), tempfile.TemporaryDirectory() as temp:
