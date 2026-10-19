@@ -1,0 +1,124 @@
+name: Android signed release runtime
+
+on:
+  workflow_call:
+    inputs:
+      expected_commit:
+        type: string
+        required: true
+      runtime_input:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  fetch-inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Admit fixed caller and original pointer before reading draft
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          RUNTIME_INPUT: ${{ inputs.runtime_input }}
+        run: |
+          python3 - <<'PY'
+          import os,re,subprocess,sys
+          assert re.fullmatch(r'[0-9a-f]{40}',os.environ['EXPECTED_COMMIT'])
+          assert os.environ['EXPECTED_COMMIT']==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert not subprocess.check_output(['git','status','--porcelain'])
+          sys.path.insert(0,'scripts')
+          from android_signed_runtime_inputs import pointer
+          pointer(os.environ['RUNTIME_INPUT'])
+          PY
+      - name: GET only the closed owned unpublished draft inputs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUNTIME_INPUT: ${{ inputs.runtime_input }}
+        run: python3 scripts/android_signed_runtime_inputs.py --pointer "$RUNTIME_INPUT" --output .build/signed-runtime-inputs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: OpenNexus-signed-runtime-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/signed-runtime-inputs/
+          if-no-files-found: error
+          retention-days: 14
+
+  release-upgrade:
+    needs: fetch-inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ANDROID_AVD_HOME: ${{ github.workspace }}/.build/android-release-runtime/avd
+      ANDROID_EMULATOR_HOME: ${{ github.workspace }}/.build/android-release-runtime/emulator-home
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@v8
+        with:
+          name: OpenNexus-signed-runtime-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/android-release-runtime/inputs
+      - name: Prepare only this hosted emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_EMULATOR_HOME" .build/android-release-runtime
+          # The headless QEMU binary still links libpulse.so.0 on the hosted image.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libpulse0
+          manager="$ANDROID_HOME/cmdline-tools/latest/bin"
+          if [[ -x "$manager/android" ]]; then
+            for package in platforms/android-36 build-tools/36.0.0 platform-tools emulator system-images/android-36/google_apis/x86_64; do
+              "$manager/android" --no-metrics --sdk="$ANDROID_HOME" sdk --ignore-outdated-xmls install "$package"
+            done
+          else
+            "$manager/sdkmanager" --sdk_root="$ANDROID_HOME" --install 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' 'system-images;android-36;google_apis;x86_64' </dev/null
+          fi
+          test -c /dev/kvm
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          # Use the official launcher, which configures its bundled library paths.
+          # Running ldd directly on QEMU incorrectly reports bundled Qt/emu libraries missing.
+          "$ANDROID_HOME/emulator/emulator" -version > .build/android-release-runtime/emulator-version.txt 2>&1
+          "$ANDROID_HOME/emulator/emulator" -accel-check
+          printf 'no\n' | "$manager/avdmanager" create avd --name "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --package 'system-images;android-36;google_apis;x86_64' --device pixel_7
+          "$ANDROID_HOME/emulator/emulator" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-release-runtime/emulator.log 2>&1 &
+          echo "$!" > .build/android-release-runtime/emulator.pid
+      - name: Recheck actual signed binaries and update without clear data
+        run: >-
+          python3 scripts/android_release_upgrade.py
+          --inputs .build/android-release-runtime/inputs --sdk "$ANDROID_HOME"
+          --java "$JAVA_HOME/bin/java" --output .build/android-release-runtime/evidence
+      - name: Stop only this job's emulator
+        if: always()
+        run: |
+          mkdir -p .build/android-release-runtime
+          python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned > .build/android-release-runtime/cleanup.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: OpenNexus-signed-release-upgrade-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .build/android-release-runtime/evidence/
+            .build/android-release-runtime/emulator.log
+            .build/android-release-runtime/emulator-version.txt
+            .build/android-release-runtime/cleanup.json
+          if-no-files-found: error
+          retention-days: 14

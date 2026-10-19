@@ -2,6 +2,7 @@
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="36" />
     <queries>
         <package android:name="cc.kronecker.opennexus.dev" />
+        <package android:name="cc.kronecker.opennexus" />
         <package android:name="cc.kronecker.opennexus.testime" />
     </queries>
     <uses-permission android:name="cc.kronecker.opennexus.testime.permission.CONTROL" />
