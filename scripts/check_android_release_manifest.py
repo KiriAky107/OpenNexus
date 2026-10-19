@@ -5,6 +5,9 @@ from release_plan import VERSION,atomic_json,digest,journal_lock,require
 from verify_android_package import package_identity
 
 PACKAGE='cc.kronecker.opennexus'
+POLICY_IDS={'debuggable':0x0101000f,'testOnly':0x01010272,'allowBackup':0x01010280,
+    'usesCleartextTraffic':0x010104ec,'networkSecurityConfig':0x01010527}
+ANDROID_NAMESPACE='http://schemas.android.com/apk/res/android:'
 
 def release_manifest(badging,xml,*,version,version_code):
     require(isinstance(version,str) and VERSION.fullmatch(version),'ANDROID_RELEASE_VERSION_INVALID')
@@ -15,13 +18,29 @@ def release_manifest(badging,xml,*,version,version_code):
     applications=[block for block in blocks if block.startswith('application ')]
     require(len(applications)==1,'ANDROID_RELEASE_APPLICATION_COUNT')
     application=applications[0]
-    def values(name):return re.findall(r'(?m)^\s*A: android:'+re.escape(name)+r'\(0x[0-9a-fA-F]+\)=(.*)$',application)
+    # Current aapt2 prints the full namespace URI and literal booleans. Older
+    # versions use android: and (type0x12) integers. Bind either spelling to the
+    # real framework resource ID; unknown namespaces/IDs cannot hide a true flag.
+    attributes={name:[] for name in POLICY_IDS}
+    names={prefix+name:name for prefix in ('android:',ANDROID_NAMESPACE) for name in POLICY_IDS}
+    ids={value:name for name,value in POLICY_IDS.items()}
+    for line in application.splitlines():
+        match=re.fullmatch(r'\s*A: ([^\r\n(]+)\(0x([0-9a-fA-F]+)\)=(.*)',line)
+        if not match:
+            require(not any(label in line for label in names),'ANDROID_RELEASE_POLICY_ATTRIBUTE_FORMAT')
+            continue
+        label,number,raw=match.groups();number=int(number,16)
+        by_name=names.get(label);by_id=ids.get(number)
+        if by_name is None and by_id is None:continue
+        require(by_name is not None and by_name==by_id,'ANDROID_RELEASE_POLICY_ATTRIBUTE_NAMESPACE_NAME_OR_ID')
+        attributes[by_name].append(raw)
+    def values(name):return attributes[name]
     def disabled(name,required):
         found=values(name)
         require(len(found)<=1 and (bool(found) or not required),'ANDROID_RELEASE_FLAG_'+name.upper())
         if not found:return False
         value=re.fullmatch(r'\(type 0x12\)0x([0-9a-fA-F]{1,8})',found[0].strip())
-        require(value is not None and int(value[1],16)==0,'ANDROID_RELEASE_FLAG_'+name.upper())
+        require(found[0].strip()=='false' or value is not None and int(value[1],16)==0,'ANDROID_RELEASE_FLAG_'+name.upper())
         return False
     require(not values('networkSecurityConfig'),'ANDROID_RELEASE_NETWORK_CONFIG_UNREVIEWED')
     return dict(application_id=PACKAGE,version=version,version_code=version_code,min_sdk=24,target_sdk=36,

@@ -28,12 +28,38 @@ class AndroidReleaseManifestContracts(unittest.TestCase):
     def test_debug_and_test_only_reject_every_nonzero_boolean(self):
         for flag in ('debuggable','testOnly'):
             for true in ('1','ffffffff'):
-                xml=XML.replace('    E: activity','    A: android:'+flag+'(0x0101000f)=(type 0x12)0x'+true+'\n    E: activity')
+                xml=XML.replace('    E: activity','    A: android:'+flag+'('+hex(subject.POLICY_IDS[flag])+')=(type 0x12)0x'+true+'\n    E: activity')
                 with self.subTest(flag=flag,true=true),self.assertRaises(Exception):self.manifest(xml)
 
     def test_explicit_false_debug_flags_are_allowed(self):
         xml=XML.replace('    E: activity','    A: android:debuggable(0x0101000f)=(type 0x12)0x0\n    A: android:testOnly(0x01010272)=(type 0x12)0x0\n    E: activity')
         self.assertFalse(self.manifest(xml)['debuggable'])
+
+    def test_current_sdk_full_namespace_and_literal_false_are_real_booleans(self):
+        # Synthetic stable flags in the spelling observed from the actual SDK
+        # decoder; no debug APK is relabelled as a stable package or executed.
+        xml=XML.replace('android:',subject.ANDROID_NAMESPACE).replace('(type 0x12)0x0','false')
+        value=self.manifest(xml)
+        self.assertFalse(value['uses_cleartext_traffic']);self.assertFalse(value['allow_backup'])
+        xml=xml.replace('    E: activity','    A: '+subject.ANDROID_NAMESPACE+'debuggable(0x0101000f)=false\n    E: activity')
+        self.assertFalse(self.manifest(xml)['debuggable'])
+
+    def test_current_sdk_true_and_string_booleans_do_not_relax_any_flag(self):
+        xml=XML.replace('android:',subject.ANDROID_NAMESPACE).replace('(type 0x12)0x0','false')
+        for name in ('allowBackup','usesCleartextTraffic'):
+            original=next(v for v in xml.splitlines() if subject.ANDROID_NAMESPACE+name+'(' in v)
+            for invalid in ('true','"false" (Raw: "false")','False','(type 0x10)0x0'):
+                with self.subTest(name=name,invalid=invalid),self.assertRaises(Exception):self.manifest(xml.replace(original,original.removesuffix('false')+invalid))
+        for name in ('debuggable','testOnly'):
+            actual='    A: '+subject.ANDROID_NAMESPACE+name+'('+hex(subject.POLICY_IDS[name])+')=true\n'
+            with self.subTest(name=name),self.assertRaises(Exception):self.manifest(xml.replace('    E: activity',actual+'    E: activity'))
+
+    def test_framework_policy_ids_or_namespaces_cannot_hide_true_flags(self):
+        for label,resource in [('other:debuggable',subject.POLICY_IDS['debuggable']),
+                (subject.ANDROID_NAMESPACE+'allowBackup',subject.POLICY_IDS['debuggable']),
+                ('android:debuggable',0x7f010001)]:
+            xml=XML.replace('    E: activity','    A: '+label+'('+hex(resource)+')=true\n    E: activity')
+            with self.subTest(label=label),self.assertRaisesRegex(Exception,'POLICY_ATTRIBUTE_NAMESPACE_NAME_OR_ID'):self.manifest(xml)
 
     def test_transport_and_backup_flags_cannot_be_true_missing_malformed_or_duplicated(self):
         for flag in ('usesCleartextTraffic','allowBackup'):
