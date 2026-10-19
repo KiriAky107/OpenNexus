@@ -60,7 +60,7 @@ public class RuntimeProbe extends Instrumentation {
             info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                 | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             ui.setServiceInfo(info);
-            CompositionIme.attach(getContext());
+            CompositionIme.attach(getContext(), APP);
             String phase = arguments.getString("phase", "");
             switch (phase) {
                 case "motion-seed": case "motion-open": case "motion-move": case "motion-resize":

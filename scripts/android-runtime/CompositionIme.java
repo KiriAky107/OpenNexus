@@ -11,6 +11,7 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import cc.kronecker.opennexus.testcontract.ImeTargetPolicy;
 
 /** CI-only client for the separate test IME; never part of the product APK. */
 final class CompositionIme {
@@ -18,9 +19,13 @@ final class CompositionIme {
     private static final String PERMISSION = PACKAGE + ".permission.CONTROL";
     private static Context context;
     private static Handler replies;
+    private static String targetPackage;
 
-    static void attach(Context source) {
+    static void attach(Context source, String packageName) {
+        if (!ImeTargetPolicy.allowed(packageName))
+            throw new IllegalStateException("Refusing an unrelated test IME attachment");
         context = source;
+        targetPackage = packageName;
         HandlerThread thread = new HandlerThread("owned-ime-replies");
         thread.start();
         replies = new Handler(thread.getLooper());
@@ -47,7 +52,7 @@ final class CompositionIme {
     }
 
     private static int send(String packageName, String operation, String text, int end) throws Exception {
-        if (context == null || !"cc.kronecker.opennexus.dev".equals(packageName))
+        if (context == null || !ImeTargetPolicy.matches(targetPackage, packageName))
             throw new IllegalStateException("Refusing an unrelated test IME target");
         String id = UUID.randomUUID().toString();
         Intent intent = new Intent(PACKAGE + ".CONTROL")

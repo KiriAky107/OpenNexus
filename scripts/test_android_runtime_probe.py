@@ -909,7 +909,10 @@ class RuntimeBoundaries(unittest.TestCase):
             compiles=[args for args in commands if Path(args[0]).name=='javac']
             self.assertEqual(len(compiles),3)
             self.assertIn('-J-Xmx256m',compiles[0]);self.assertIn('-J-Xmx256m',compiles[1])
-            self.assertTrue(all(path.parent.name=='ime' for path in compiles[0] if isinstance(path,Path) and path.suffix=='.java'))
+            ime_sources=[path for path in compiles[0] if isinstance(path,Path) and path.suffix=='.java']
+            shared=[path for path in ime_sources if path.parent.name!='ime']
+            self.assertEqual([path.name for path in shared],['ImeTargetPolicy.java'])
+            self.assertTrue(all(path.parent.name=='android-runtime' for path in shared))
             self.assertTrue(all(path.parent.name=='android-runtime' for path in compiles[1] if isinstance(path,Path) and path.suffix=='.java'))
             self.assertEqual(compiles[2][-1].parent.name,'android-runtime-tests')
             self.assertTrue((probe.output/'driver-target-stability.txt').read_bytes().startswith(b'TARGET_STABILITY_OK '))

@@ -501,8 +501,11 @@ class Probe:
             build.mkdir()
             classes, dex = build / 'classes', build / 'dex'
             classes.mkdir(); dex.mkdir()
+            sources = sorted(source.glob('*.java'))
+            if name == 'ime':
+                sources.append(root / 'ImeTargetPolicy.java')
             self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-source', '8', '-target', '8',
-                '-classpath', platform, '-d', classes, *sorted(source.glob('*.java'))])
+                '-classpath', platform, '-d', classes, *sources])
             if name == 'driver':
                 # This pure JVM admission check is not part of either APK.
                 # It guards the actual one-tap driver used below on the device.
@@ -514,6 +517,13 @@ class Probe:
                     'cc.kronecker.opennexus.testdriver.TargetStabilityCheck']).stdout
                 (self.output / 'driver-target-stability.txt').write_bytes(observed)
                 require(observed.startswith(b'TARGET_STABILITY_OK '), 'Actual driver target-stability check failed')
+                if getattr(self.args, 'scope', '') == 'release-upgrade':
+                    self.command(['javac','-J-Xmx128m','-encoding','UTF-8','-classpath',classes,
+                        '-d',checks,root.parent/'android-runtime-tests/ImeTargetPolicyCheck.java'])
+                    observed=self.command(['java','-Xmx64m','-cp',str(classes)+os.pathsep+str(checks),
+                        'cc.kronecker.opennexus.testcontract.ImeTargetPolicyCheck']).stdout
+                    (self.output/'driver-ime-target-policy.txt').write_bytes(observed)
+                    require(observed.startswith(b'IME_TARGET_POLICY_OK 20 '), 'Actual IME target policy differs')
                 if getattr(self.args,'scope','')=='external-links':
                     self.command(['javac','-J-Xmx128m','-encoding','UTF-8','-classpath',str(classes)+os.pathsep+str(platform),
                         '-d',checks,root.parent/'android-runtime-tests/OriginalExternalUriCheck.java'])

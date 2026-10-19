@@ -6,6 +6,7 @@ import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.TextView;
+import cc.kronecker.opennexus.testcontract.ImeTargetPolicy;
 
 /** Real CI InputConnection in a UID that am instrument cannot force-stop. */
 public final class CompositionInputMethod extends InputMethodService {
@@ -25,11 +26,11 @@ public final class CompositionInputMethod extends InputMethodService {
         return view;
     }
 
-    boolean execute(String operation, String text, int end) {
+    boolean execute(String target, String operation, String text, int end) {
         EditorInfo info = getCurrentInputEditorInfo();
         InputConnection connection = getCurrentInputConnection();
         if (active != this || !started || info == null || connection == null
-                || !"cc.kronecker.opennexus.dev".equals(info.packageName) || password(info.inputType)) return false;
+                || !ImeTargetPolicy.matches(target, info.packageName) || password(info.inputType)) return false;
         switch (operation) {
             case "check": return true;
             case "select": return connection.setSelection(end, end);
