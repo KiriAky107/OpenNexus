@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from android_release_observation import APP, DATABASES, admit_files
+from android_release_observation import APP, DATABASES, admit_files, admit_attachment
 from android_runtime_probe import require
 
 
@@ -18,9 +18,13 @@ def fingerprint(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def inspect_stopped_snapshot(snapshot, working, files):
+def inspect_stopped_snapshot(snapshot, working, files, *, attachment=None):
     snapshot, working = Path(snapshot).resolve(), Path(working).resolve()
     fixtures = admit_files(files)
+    files = list(files)
+    if attachment is not None:
+        fixtures += (admit_attachment(attachment),)
+        files.append(attachment)
     require(not working.exists() and not working.is_relative_to(snapshot), 'RELEASE_SNAPSHOT_NEW_WORKING_COPY_REQUIRED')
     original = json.loads((snapshot / 'snapshot.json').read_text('utf-8'))
     expected = set(fixtures) | {db + suffix for db in DATABASES for suffix in ('', '-wal', '-shm')}
@@ -56,6 +60,11 @@ def inspect_stopped_snapshot(snapshot, working, files):
             for path in files:
                 result[path][key] = [dict(zip(columns.split(','), row)) for row in rows(drafts,
                     'SELECT ' + columns + ' FROM ' + table + ' WHERE path=? ORDER BY rowid', (path,))]
+        if attachment is not None:
+            columns = 'operation_id,draft_id,path,generation,asset_path,hash,size,state,error,content_before,content_after'
+            for path in files:
+                result[path]['images'] = [dict(zip(columns.split(','), row)) for row in rows(drafts,
+                    'SELECT ' + columns + ' FROM image_intents WHERE path=? ORDER BY rowid', (path,))]
     with closing(sqlite3.connect((working / DATABASES[1]).as_uri() + '?mode=ro', uri=True)) as host:
         host.execute('PRAGMA query_only=ON')
         require(host.execute('PRAGMA integrity_check').fetchone() == ('ok',), 'RELEASE_SNAPSHOT_HOST_INTEGRITY')

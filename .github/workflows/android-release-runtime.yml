@@ -9,6 +9,10 @@ on:
       runtime_input:
         type: string
         required: true
+      scene:
+        type: string
+        default: upgrade
+        required: false
 
 permissions:
   contents: read
@@ -28,9 +32,11 @@ jobs:
         env:
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           RUNTIME_INPUT: ${{ inputs.runtime_input }}
+          RUNTIME_SCENE: ${{ inputs.scene }}
         run: |
           python3 - <<'PY'
           import os,re,subprocess,sys
+          assert os.environ.get('RUNTIME_SCENE','upgrade') in ('upgrade','media')
           assert re.fullmatch(r'[0-9a-f]{40}',os.environ['EXPECTED_COMMIT'])
           assert os.environ['EXPECTED_COMMIT']==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           assert not subprocess.check_output(['git','status','--porcelain'])
@@ -52,6 +58,7 @@ jobs:
           retention-days: 14
 
   release-upgrade:
+    name: ${{ inputs.scene == 'media' && 'release-media' || 'release-upgrade' }}
     needs: fetch-inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -102,8 +109,15 @@ jobs:
           "$ANDROID_HOME/emulator/emulator" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-release-runtime/emulator.log 2>&1 &
           echo "$!" > .build/android-release-runtime/emulator.pid
       - name: Recheck actual signed binaries and update without clear data
+        if: inputs.scene == 'upgrade'
         run: >-
           python3 scripts/android_release_upgrade.py
+          --inputs .build/android-release-runtime/inputs --sdk "$ANDROID_HOME"
+          --java "$JAVA_HOME/bin/java" --output .build/android-release-runtime/evidence
+      - name: Verify only the signed successor through system media and SAF
+        if: inputs.scene == 'media'
+        run: >-
+          python3 scripts/android_release_media.py
           --inputs .build/android-release-runtime/inputs --sdk "$ANDROID_HOME"
           --java "$JAVA_HOME/bin/java" --output .build/android-release-runtime/evidence
       - name: Stop only this job's emulator
@@ -114,7 +128,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: OpenNexus-signed-release-upgrade-${{ github.sha }}-${{ github.run_attempt }}
+          name: OpenNexus-signed-release-${{ inputs.scene == 'media' && 'media' || 'upgrade' }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             .build/android-release-runtime/evidence/
             .build/android-release-runtime/emulator.log

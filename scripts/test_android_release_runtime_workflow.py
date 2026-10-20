@@ -28,6 +28,23 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
                 self.assertFalse(admitted(caller['jobs'][name]['if'],'release-runtime',reuse=reuse,build='skipped'))
         self.assertEqual(set(self.flow()['on']),{'workflow_call'})
 
+    def test_media_scene_uses_only_successor_script_and_unknown_scene_is_rejected_before_read(self):
+        caller=yaml.load((ROOT/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
+        option=caller['on']['workflow_dispatch']['inputs']['release_runtime_scene']
+        self.assertEqual(option['options'],['upgrade','media']);self.assertEqual(option['default'],'upgrade')
+        self.assertLessEqual(len(caller['on']['workflow_dispatch']['inputs']),25)
+        flow=self.flow();self.assertEqual(flow['on']['workflow_call']['inputs']['scene']['default'],'upgrade')
+        steps=flow['jobs']['release-upgrade']['steps']
+        upgrade=next(s for s in steps if s.get('name')=='Recheck actual signed binaries and update without clear data')
+        media=next(s for s in steps if s.get('name')=='Verify only the signed successor through system media and SAF')
+        self.assertEqual(upgrade['if'],"inputs.scene == 'upgrade'");self.assertEqual(media['if'],"inputs.scene == 'media'")
+        self.assertIn('android_release_media.py',media['run']);self.assertNotIn('android_release_upgrade.py',media['run'])
+        gate=next(s['run'] for s in flow['jobs']['fetch-inputs']['steps'] if s.get('name','').startswith('Admit fixed'))
+        code=gate.split("python3 - <<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+        with patch.dict(os.environ,RUNTIME_SCENE='media-extra'),patch('subprocess.check_output') as command:
+            with self.assertRaises(AssertionError):exec(compile(code,'closed-release-scene','exec'),{})
+            command.assert_not_called()
+
     def test_draft_read_token_is_not_given_to_emulator_job(self):
         flow=self.flow();fetch=flow['jobs']['fetch-inputs'];runtime=flow['jobs']['release-upgrade']
         self.assertEqual(fetch['permissions'],{'contents':'write'})

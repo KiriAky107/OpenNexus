@@ -65,6 +65,12 @@ on:
       - '.github/workflows/android.yml'
   workflow_dispatch:
     inputs:
+      release_runtime_scene:
+        description: 'Signed release-runtime only: original upgrade or successor-only system media acceptance.'
+        type: choice
+        options: [upgrade, media]
+        default: upgrade
+        required: false
       release_runtime_input:
         description: 'Release-runtime only: immutable owned draft id:manifest asset id:SHA256; no signing key.'
         type: string
@@ -136,6 +142,7 @@ jobs:
     with:
       expected_commit: ${{ inputs.apk_run_id == '' && inputs.apk_commit == '' && inputs.release_product_commit == '' && github.sha || '' }}
       runtime_input: ${{ inputs.release_runtime_input }}
+      scene: ${{ inputs.release_runtime_scene || 'upgrade' }}
 
   release-inputs:
     if: github.event_name == 'workflow_dispatch' && inputs.runtime_scope == 'release-inputs'

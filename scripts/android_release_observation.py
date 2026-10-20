@@ -47,6 +47,13 @@ def admit_root(root):
     return root
 
 
+def admit_attachment(path):
+    require(type(path) is str, 'RELEASE_OBSERVATION_EXACT_ATTACHMENT')
+    match = re.fullmatch(r'attachments/([0-9a-f]{2})/([0-9a-f]{64})\.png', path)
+    require(match is not None and match[1] == match[2][:2], 'RELEASE_OBSERVATION_EXACT_ATTACHMENT')
+    return 'vault/' + path
+
+
 def exclusive(path, raw):
     with path.open('xb') as stream:
         stream.write(raw)
@@ -75,11 +82,13 @@ def require_stopped_package(state):
 
 
 class StoppedReleaseObserver:
-    def __init__(self, device, serial, output, files):
+    def __init__(self, device, serial, output, files, *, attachment=None):
         require_hosted_emulator(serial)
         self.device, self.serial, self.output = device, serial, Path(output)
         self.files = admit_files(files)
         self.allowed = set(self.files) | {db + suffix for db in DATABASES for suffix in ('', '-wal', '-shm')}
+        if attachment is not None:
+            self.allowed.add(admit_attachment(attachment))
         self.identity = None
         self.stopped_checks = 0
         require(not self.output.exists(), 'RELEASE_OBSERVATION_ORIGINAL_OUTPUT_EXISTS')
