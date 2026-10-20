@@ -22,13 +22,16 @@ import org.json.JSONObject;
 
 /** Actual installed-app UI only. No password arguments, raw UI dump or screenshot. */
 public class AuthRuntimeProbe extends Instrumentation {
-    private static final String APP = "cc.kronecker.opennexus.dev";
+    protected final String APP;
     private Bundle args;
     private UiAutomation ui;
     protected String stage = "initialization";
     private String inputTrace="none";
     private String inputTarget="none";
     private final List<String> inputHistory=new ArrayList<>();
+
+    public AuthRuntimeProbe() { this(false); }
+    protected AuthRuntimeProbe(boolean release) { APP=ReleaseScene.application(release); }
 
     @Override public void onCreate(Bundle value) { super.onCreate(value); args=value; start(); }
     @Override public void onStart() {
@@ -452,7 +455,7 @@ public class AuthRuntimeProbe extends Instrumentation {
         for (int i=0;i<node.getChildCount();i++) { AccessibilityNodeInfo child=node.getChild(i);if (child!=null) count+=editableCount(child,depth+1); }
         return count;
     }
-    private static boolean inputLabel(AccessibilityNodeInfo node,String name) {
+    private boolean inputLabel(AccessibilityNodeInfo node,String name) {
         if (label(node,name)) return true;
         AccessibilityNodeInfo associated=node.getLabeledBy();
         if (associated!=null && APP.equals(text(associated.getPackageName())) && label(associated,name)) return true;
