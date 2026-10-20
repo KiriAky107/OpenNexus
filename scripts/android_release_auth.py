@@ -64,6 +64,9 @@ def validate_normal_observations(provider, native, sealed):
 class ReleaseAuth(ReleaseUpgrade):
     observe = AuthProbe.observe
     stage_owned_input = AuthProbe.stage_owned_input
+    allowed_phases = PHASES
+    driver_entry = 'ReleaseAuthRuntimeProbe'
+    driver_namespace = 'RELEASE_AUTH'
 
     def __init__(self, inputs, sdk, java, output, serial='emulator-5562'):
         require_hosted(); require_hosted_emulator(serial)
@@ -82,7 +85,7 @@ class ReleaseAuth(ReleaseUpgrade):
         self.manifest = strict_json((self.inputs / 'runtime-inputs.json').read_bytes())
         self.observer = StoppedAuthObserver(self.device, serial, self.tools / 'private-auth-indexes')
         self.identity = self.root = None
-        atomic_json(self.output / 'auth-scope-intent.json', dict(install_only='successor', phases=list(PHASES),
+        atomic_json(self.output / 'auth-scope-intent.json', dict(install_only='successor', phases=list(self.allowed_phases),
             private_auth_indexes_and_input_outside_artifacts=True, ciphertext_bytes_never_read=True,
             raw_UI_and_credentials_never_captured=True, mutation_retry=False))
 
@@ -92,15 +95,15 @@ class ReleaseAuth(ReleaseUpgrade):
         atomic_json(self.output / (label + '-capture-omitted.json'), dict(raw_UI_capture=False, credentials_captured=False))
 
     def phase(self, phase, label):
-        require(phase in PHASES and re.fullmatch(r'[a-z][a-z0-9-]{0,47}', label), 'RELEASE_AUTH_EXACT_PHASE')
+        require(phase in self.allowed_phases and re.fullmatch(r'[a-z][a-z0-9-]{0,47}', label), 'RELEASE_AUTH_EXACT_PHASE')
         self.stop()
         self.original_command(label + '-launch', ('shell', '-T', shlex.join(('am', 'start', '-W', '-n', self.activity))))
         pid = self.shell('pidof', APP).stdout.decode('ascii').strip()
         require(re.fullmatch(r'[1-9][0-9]{0,9}', pid), 'RELEASE_AUTH_OWN_PROCESS_MISSING')
         try:
             result = self.original_command(label + '-instrument', ('shell', '-T', shlex.join(
-                ('am', 'instrument', '-w', '-e', 'phase', phase, DRIVER + '/.ReleaseAuthRuntimeProbe'))), timeout=180)
-            require(('OPENNEXUS_RELEASE_AUTH_PHASE_OK ' + phase).encode() in result.stdout
+                ('am', 'instrument', '-w', '-e', 'phase', phase, DRIVER + '/.' + self.driver_entry))), timeout=180)
+            require(('OPENNEXUS_' + self.driver_namespace + '_PHASE_OK ' + phase).encode() in result.stdout
                     and b'_PHASE_FAILED' not in result.stdout and b'INSTRUMENTATION_FAILED' not in result.stdout,
                     'RELEASE_AUTH_ORIGINAL_GUI_FAILED')
             self.phases.append(dict(phase=phase, label=label, pid=int(pid), passed=True))
@@ -128,7 +131,7 @@ class ReleaseAuth(ReleaseUpgrade):
             except Exception as error:
                 atomic_json(self.output / ('failure-' + label + '-unavailable.json'), dict(error_type=type(error).__name__, mutation_retried=False))
 
-    def run(self):
+    def prepare(self):
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             if self.device('get-state', check=False, timeout=10).stdout.strip() == b'device' and self.shell('getprop', 'sys.boot_completed', check=False).stdout.strip() == b'1': break
@@ -152,6 +155,9 @@ class ReleaseAuth(ReleaseUpgrade):
         self.stage_owned_input(configuration)
         baseline = self.observe('initial'); expect_requests(baseline, 0, 0, 0)
         require(all(not v['devices'] and not v['session_counts'] for v in baseline['users']), 'RELEASE_AUTH_FRESH_PROVIDER_REQUIRED')
+
+    def run(self):
+        self.prepare()
         provider, native, sealed = [], [], []
         for phase, label in zip(PHASES, ('login', 'cold-current', 'refresh', 'logout')):
             self.phase(phase, label)
@@ -170,12 +176,12 @@ class ReleaseAuth(ReleaseUpgrade):
         return result
 
 
-def main():
+def main(probe_type=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('inputs', 'sdk', 'java', 'output'): parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args(); probe = None
     try:
-        probe = ReleaseAuth(args.inputs, args.sdk, args.java, args.output)
+        probe = (probe_type or ReleaseAuth)(args.inputs, args.sdk, args.java, args.output)
         result = probe.run()
         print(json.dumps({k:result[k] for k in ('kind', 'passed', 'abi', 'physical_phone_verified', 'published')}))
         return 0

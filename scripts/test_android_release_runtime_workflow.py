@@ -33,7 +33,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
     def test_media_scene_uses_only_successor_script_and_unknown_scene_is_rejected_before_read(self):
         caller=yaml.load((ROOT/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
         option=caller['on']['workflow_dispatch']['inputs']['release_runtime_scene']
-        self.assertEqual(option['options'],['upgrade','media','auth']);self.assertEqual(option['default'],'upgrade')
+        self.assertEqual(option['options'],['upgrade','media','auth','auth-recovery']);self.assertEqual(option['default'],'upgrade')
         self.assertLessEqual(len(caller['on']['workflow_dispatch']['inputs']),25)
         flow=self.flow();self.assertEqual(flow['on']['workflow_call']['inputs']['scene']['default'],'upgrade')
         steps=flow['jobs']['release-upgrade']['steps']
@@ -64,7 +64,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
     def test_auth_origin_is_fixed_and_private_provider_paths_are_never_uploaded(self):
         runtime=self.flow()['jobs']['release-upgrade'];steps=runtime['steps']
         checkout=next(s for s in steps if s.get('with',{}).get('repository')=='KiriAky107/Sync-for-OpenNexus')
-        self.assertEqual(checkout['if'],"inputs.scene == 'auth'")
+        self.assertEqual(checkout['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery'")
         self.assertEqual(checkout['with']['ref'],'29e2e6d373ea752352981bdad05d34a7a0d9c3d9')
         self.assertEqual(checkout['with']['persist-credentials'],'false')
         auth=next(s for s in steps if 'android_release_auth.py' in s.get('run',''))
@@ -72,10 +72,20 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         prepare=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
         self.assertIn('uv sync --frozen',prepare['run']);self.assertNotIn('GITHUB_TOKEN',str(prepare))
         cleanup=next(s for s in steps if s.get('name')=='Stop only the original owned HTTPS auth origin')
-        self.assertEqual(cleanup['if'],"always() && inputs.scene == 'auth'")
+        self.assertEqual(cleanup['if'],"always() && (inputs.scene == 'auth' || inputs.scene == 'auth-recovery')")
         upload=next(s for s in steps if s.get('uses')=='actions/upload-artifact@v7')['with']['path']
         self.assertNotIn('owned-auth-',upload);self.assertNotIn('driver-build',upload);self.assertNotIn('android-auth-source',upload)
         self.assertIn('origin-proof/',upload)
+
+    def test_recovery_selects_only_its_original_response_script_and_private_origin(self):
+        steps=self.flow()['jobs']['release-upgrade']['steps']
+        recovery=next(s for s in steps if 'android_release_auth_recovery.py' in s.get('run',''))
+        self.assertEqual(recovery['if'],"inputs.scene == 'auth-recovery'")
+        self.assertNotIn('android_release_auth.py ',recovery['run'])
+        origin=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
+        self.assertEqual(origin['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery'")
+        self.assertLess(steps.index(recovery),next(i for i,s in enumerate(steps) if s.get('name')=='Stop only the original owned HTTPS auth origin'))
+        self.assertTrue(all('unused' not in s.get('name','').lower() for s in steps))
 
     def test_auth_preparation_creates_original_hosted_parent_before_service_admission(self):
         from android_auth_hosted import HostedOrigin

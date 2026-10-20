@@ -42,22 +42,26 @@ class ReleaseAuthEntry(unittest.TestCase):
         if not sdk.is_file() or not javac.is_file():self.skipTest('JDK and API36 required')
         with tempfile.TemporaryDirectory(prefix='opennexus-release-auth-entry-') as folder:
             root=Path(folder);actual=root/'actual';actual.mkdir();harness=root/'harness';harness.mkdir()
-            names=('ReleaseScene.java','ReleaseAuthScene.java','AuthRuntimeProbe.java','ReleaseAuthRuntimeProbe.java','TargetStability.java','TouchViewport.java')
+            names=('ReleaseScene.java','ReleaseAuthScene.java','AuthRuntimeProbe.java','ReleaseAuthRuntimeProbe.java','ReleaseAuthRecoveryRuntimeProbe.java','TargetStability.java','TouchViewport.java')
             self.compile([str(javac),'-J-Xmx128m','-encoding','UTF-8','-classpath',str(sdk),'-d',str(actual),
                 *(str(ROOT/'android-runtime'/name) for name in names)])
             paths=[]
             for name,value in STUBS.items():
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value,'utf-8');paths.append(str(path))
             self.compile([str(javac),'-J-Xmx128m','-encoding','UTF-8','-classpath',str(actual)+os.pathsep+str(sdk),
-                '-d',str(harness),*paths,str(ROOT/'android-runtime-tests/ReleaseAuthEntryCheck.java')])
+                '-d',str(harness),*paths,str(ROOT/'android-runtime-tests/ReleaseAuthEntryCheck.java'),str(ROOT/'android-runtime-tests/ReleaseAuthRecoveryEntryCheck.java')])
             result=subprocess.run([str(java),'-Xmx64m','-cp',os.pathsep.join(map(str,(harness,actual,sdk))),
                 'cc.kronecker.opennexus.testdriver.ReleaseAuthEntryCheck'],capture_output=True,check=True,timeout=15)
             self.assertIn(b'RELEASE_AUTH_ENTRY_OK accepted=4 refused=15 actual_Android_TLS_or_auth=0',result.stdout)
+            recovery=subprocess.run([str(java),'-Xmx64m','-cp',os.pathsep.join(map(str,(harness,actual,sdk))),
+                'cc.kronecker.opennexus.testdriver.ReleaseAuthRecoveryEntryCheck'],capture_output=True,check=True,timeout=15)
+            self.assertIn(b'RELEASE_AUTH_RECOVERY_ENTRY_OK accepted=3 refused=15 actual_Android_TLS_or_recovery=0',recovery.stdout)
 
     def test_instrumentation_targets_only_the_separate_driver_package(self):
         root=ET.parse(ROOT/'android-runtime/AndroidManifest.xml').getroot();ns='{http://schemas.android.com/apk/res/android}'
-        matches=[e for e in root.findall('instrumentation') if e.get(ns+'name')=='cc.kronecker.opennexus.testdriver.ReleaseAuthRuntimeProbe']
-        self.assertEqual(len(matches),1);self.assertEqual(matches[0].get(ns+'targetPackage'),'cc.kronecker.opennexus.testdriver')
-        self.assertEqual(matches[0].get(ns+'functionalTest'),'false')
+        for name in ('ReleaseAuthRuntimeProbe','ReleaseAuthRecoveryRuntimeProbe'):
+            matches=[e for e in root.findall('instrumentation') if e.get(ns+'name')=='cc.kronecker.opennexus.testdriver.'+name]
+            self.assertEqual(len(matches),1);self.assertEqual(matches[0].get(ns+'targetPackage'),'cc.kronecker.opennexus.testdriver')
+            self.assertEqual(matches[0].get(ns+'functionalTest'),'false')
 
 if __name__=='__main__':unittest.main()
