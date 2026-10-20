@@ -101,7 +101,7 @@ class ReleaseBackground(unittest.TestCase):
         def release(mode):
             events.append(mode); (subject.owner / 'fault-events' / (HOLD + '.released.json')).write_text('{}', 'utf-8'); return RELEASE
         subject.control = Mock(side_effect=release)
-        subject.device = lambda *args, **kwargs: events.append('finish-signal')
+        subject.finish_held_driver = lambda: events.append('finish-signal')
         return subject, process, events
 
     def test_actual_orchestration_keeps_driver_alive_through_Home_then_stops_before_private_read(self):
@@ -126,6 +126,19 @@ class ReleaseBackground(unittest.TestCase):
             self.assertNotIn('held-home', events); self.assertNotIn('finish-signal', events)
             result = json.loads((subject.output / 'held-instrument-result.json').read_bytes())
             self.assertTrue(result['unknown_result']); self.assertFalse(result['automatic_retry'])
+
+    def test_tail_acknowledgement_failure_keeps_original_Home_and_release_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            subject, process, events = self.subject(Path(folder))
+            subject.finish_held_driver = Mock(side_effect=RuntimeError('original signal unknown'))
+            with patch('android_release_auth_background.subprocess.Popen', return_value=process), patch('android_release_auth_background.time.sleep'):
+                with self.assertRaisesRegex(RuntimeError, 'original signal unknown'): subject.held_background(HOLD)
+            self.assertTrue((subject.output / 'held-background-transition.json').is_file())
+            self.assertTrue((subject.output / 'original-held-marker.json').is_file())
+            self.assertTrue((subject.output / 'original-held-released-marker.json').is_file())
+            subject.control.assert_called_once_with('release'); subject.finish_held_driver.assert_called_once()
+            self.assertEqual(events.count('held-home'), 1); self.assertEqual(subject.phases, [])
+            subject.snapshot.assert_not_called(); subject.observer.ciphertext_fingerprints.assert_not_called()
 
     def test_unknown_async_result_does_not_start_another_login(self):
         with tempfile.TemporaryDirectory() as folder:

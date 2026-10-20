@@ -68,6 +68,31 @@ class ReleaseAuthBackground(ReleaseAuth):
     driver_namespace = 'RELEASE_AUTH_BACKGROUND'
     control = AuthProbe.control
 
+    def finish_held_driver(self):
+        # Publishing the destination with `cat > finish` exposes a zero-length
+        # file to the driver's existence check before cat writes its bytes.
+        # Complete and validate one fresh staging file, then link it atomically
+        # without replacing any existing original signal.
+        temporary = 'no_backup/owned-auth-held.finish.tmp'
+        final = 'no_backup/owned-auth-held.finish'
+        script = ('umask 077; test ! -e ' + temporary + ' && test ! -e ' + final +
+                  ' && cat > ' + temporary + ' && test "$(stat -c %s ' + temporary + ')" = 7' +
+                  ' && test "$(cat ' + temporary + ')" = finish && ln ' + temporary + ' ' + final + ' && rm ' + temporary)
+        args = ('shell', '-T', shlex.join(('run-as', DRIVER, 'sh', '-c', script)))
+        atomic_json(self.output / 'held-finish-intent.json', dict(arguments=list(args), input_bytes=7,
+            original_once=True, automatic_retry=False, complete_before_atomic_publish=True))
+        try:
+            result = self.device(*args, input=b'finish\n', timeout=15, check=False)
+        except subprocess.TimeoutExpired:
+            atomic_json(self.output / 'held-finish-result.json', dict(returncode=None, unknown_result=True, automatic_retry=False))
+            raise
+        atomic_json(self.output / 'held-finish-result.json', dict(returncode=result.returncode, unknown_result=False, automatic_retry=False))
+        require(result.returncode == 0, 'RELEASE_BACKGROUND_ORIGINAL_FINISH_PUBLISH_FAILED')
+        observed = self.shell('run-as', DRIVER, 'cat', final, check=False)
+        require(observed.returncode == 0 and observed.stdout == b'finish\n', 'RELEASE_BACKGROUND_ORIGINAL_FINISH_READBACK')
+        atomic_json(self.output / 'held-finish-readback.json', dict(expected_static_bytes_observed=True, bytes=7,
+            raw_product_or_credential_file_read=False))
+
     def app_is_resumed(self):
         # Only reduce the private raw activity dump to a boolean; never persist it.
         raw = self.shell('dumpsys', 'activity', 'activities').stdout
@@ -107,17 +132,18 @@ class ReleaseAuthBackground(ReleaseAuth):
             time.sleep(1)
             require(process.poll() is None and self.shell('pidof', APP).stdout.strip() == pid and not self.app_is_resumed(),
                     'RELEASE_BACKGROUND_ENDED_BEFORE_ORIGINAL_DELIVERY')
-            self.device('shell', '-T', 'run-as ' + DRIVER + ' sh -c ' +
-                        "'umask 077; test ! -e no_backup/owned-auth-held.finish && cat > no_backup/owned-auth-held.finish'", input=b'finish\n')
-            stdout, stderr = process.communicate(timeout=30); complete = True
-            require(process.returncode == 0 and b'OPENNEXUS_RELEASE_AUTH_BACKGROUND_PHASE_OK login-b-held' in stdout
-                    and b'_PHASE_FAILED' not in stdout and b'INSTRUMENTATION_FAILED' not in stdout, 'RELEASE_BACKGROUND_ORIGINAL_GUI_FAILED')
             transition = dict(pid=int(pid), same_original_app_process=True, actual_foreground_before_Home=True,
                 actual_background_after_Home=True, same_UI_instrumentation_alive_until_after_original_release=True,
                 private_auth_observed_only_after_stop=True, original_control_id=held_id)
             atomic_json(self.output / 'held-background-transition.json', transition)
             atomic_json(self.output / 'original-held-marker.json', read_json(self.owner / 'fault-events' / (held_id + '.json')))
             atomic_json(self.output / 'original-held-released-marker.json', read_json(released_path))
+            # Preserve the already-observed original release even if this last
+            # test-driver acknowledgement fails. It must not trigger a replay.
+            self.finish_held_driver()
+            stdout, stderr = process.communicate(timeout=30); complete = True
+            require(process.returncode == 0 and b'OPENNEXUS_RELEASE_AUTH_BACKGROUND_PHASE_OK login-b-held' in stdout
+                    and b'_PHASE_FAILED' not in stdout and b'INSTRUMENTATION_FAILED' not in stdout, 'RELEASE_BACKGROUND_ORIGINAL_GUI_FAILED')
             self.phases.append(dict(phase='login-b-held', label='held-background', pid=int(pid), passed=True))
             return held, release_id, transition
         finally:
