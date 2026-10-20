@@ -31,7 +31,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
     def test_media_scene_uses_only_successor_script_and_unknown_scene_is_rejected_before_read(self):
         caller=yaml.load((ROOT/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
         option=caller['on']['workflow_dispatch']['inputs']['release_runtime_scene']
-        self.assertEqual(option['options'],['upgrade','media']);self.assertEqual(option['default'],'upgrade')
+        self.assertEqual(option['options'],['upgrade','media','auth']);self.assertEqual(option['default'],'upgrade')
         self.assertLessEqual(len(caller['on']['workflow_dispatch']['inputs']),25)
         flow=self.flow();self.assertEqual(flow['on']['workflow_call']['inputs']['scene']['default'],'upgrade')
         steps=flow['jobs']['release-upgrade']['steps']
@@ -58,6 +58,22 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
             checkout=next(s for s in job['steps'] if s.get('uses')=='actions/checkout@v7')
             self.assertEqual(checkout['with']['persist-credentials'],'false')
         self.assertNotIn('pnpm',str(flow));self.assertNotIn('gradlew',str(flow));self.assertNotIn('cargo build',str(flow))
+
+    def test_auth_origin_is_fixed_and_private_provider_paths_are_never_uploaded(self):
+        runtime=self.flow()['jobs']['release-upgrade'];steps=runtime['steps']
+        checkout=next(s for s in steps if s.get('with',{}).get('repository')=='KiriAky107/Sync-for-OpenNexus')
+        self.assertEqual(checkout['if'],"inputs.scene == 'auth'")
+        self.assertEqual(checkout['with']['ref'],'29e2e6d373ea752352981bdad05d34a7a0d9c3d9')
+        self.assertEqual(checkout['with']['persist-credentials'],'false')
+        auth=next(s for s in steps if 'android_release_auth.py' in s.get('run',''))
+        self.assertEqual(auth['if'],"inputs.scene == 'auth'");self.assertNotIn('android_release_upgrade.py',auth['run'])
+        prepare=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
+        self.assertIn('uv sync --frozen',prepare['run']);self.assertNotIn('GITHUB_TOKEN',str(prepare))
+        cleanup=next(s for s in steps if s.get('name')=='Stop only the original owned HTTPS auth origin')
+        self.assertEqual(cleanup['if'],"always() && inputs.scene == 'auth'")
+        upload=next(s for s in steps if s.get('uses')=='actions/upload-artifact@v7')['with']['path']
+        self.assertNotIn('owned-auth-',upload);self.assertNotIn('driver-build',upload);self.assertNotIn('android-auth-source',upload)
+        self.assertIn('origin-proof/',upload)
 
     def test_actual_admission_gate_rejects_branch_mismatch_dirty_source_or_unfrozen_pointer(self):
         steps=self.flow()['jobs']['fetch-inputs']['steps'];gate=next(s['run'] for s in steps if s.get('name','').startswith('Admit fixed'))
@@ -91,7 +107,8 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
             '.build/android-release-runtime/evidence/',
             '.build/android-release-runtime/emulator.log',
             '.build/android-release-runtime/emulator-version.txt',
-            '.build/android-release-runtime/cleanup.json'])
+            '.build/android-release-runtime/cleanup.json',
+            '.build/android-release-runtime/origin-proof/'])
         self.assertNotIn('.p12',str(self.flow()));self.assertNotIn('sign_android_release.py',str(self.flow()))
 
 

@@ -66,9 +66,9 @@ on:
   workflow_dispatch:
     inputs:
       release_runtime_scene:
-        description: 'Signed release-runtime only: original upgrade or successor-only system media acceptance.'
+        description: 'Signed release-runtime only: original upgrade, successor-only media or normal HTTPS auth.'
         type: choice
-        options: [upgrade, media]
+        options: [upgrade, media, auth]
         default: upgrade
         required: false
       release_runtime_input:

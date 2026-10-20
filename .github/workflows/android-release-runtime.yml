@@ -36,7 +36,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import os,re,subprocess,sys
-          assert os.environ.get('RUNTIME_SCENE','upgrade') in ('upgrade','media')
+          assert os.environ.get('RUNTIME_SCENE','upgrade') in ('upgrade','media','auth')
           assert re.fullmatch(r'[0-9a-f]{40}',os.environ['EXPECTED_COMMIT'])
           assert os.environ['EXPECTED_COMMIT']==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           assert not subprocess.check_output(['git','status','--porcelain'])
@@ -58,10 +58,10 @@ jobs:
           retention-days: 14
 
   release-upgrade:
-    name: ${{ inputs.scene == 'media' && 'release-media' || 'release-upgrade' }}
+    name: ${{ inputs.scene == 'auth' && 'release-auth' || inputs.scene == 'media' && 'release-media' || 'release-upgrade' }}
     needs: fetch-inputs
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 55
     permissions:
       contents: read
       actions: read
@@ -80,6 +80,26 @@ jobs:
         with:
           name: OpenNexus-signed-runtime-inputs-${{ github.run_id }}-${{ github.run_attempt }}
           path: .build/android-release-runtime/inputs
+      - uses: actions/checkout@v7
+        if: inputs.scene == 'auth'
+        with:
+          repository: KiriAky107/Sync-for-OpenNexus
+          ref: 29e2e6d373ea752352981bdad05d34a7a0d9c3d9
+          path: .build/android-auth-source
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        if: inputs.scene == 'auth'
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        if: inputs.scene == 'auth'
+      - name: Prepare only the fixed independent HTTPS auth origin
+        if: inputs.scene == 'auth'
+        run: |
+          set -euo pipefail
+          uv sync --frozen --project .build/android-auth-source
+          mkdir -p .build/android-release-runtime/origin-proof
+          .build/android-auth-source/.venv/bin/python scripts/android_auth_hosted.py prepare > .build/android-release-runtime/origin-proof/origin.json
       - name: Prepare only this hosted emulator
         shell: bash
         run: |
@@ -120,6 +140,17 @@ jobs:
           python3 scripts/android_release_media.py
           --inputs .build/android-release-runtime/inputs --sdk "$ANDROID_HOME"
           --java "$JAVA_HOME/bin/java" --output .build/android-release-runtime/evidence
+      - name: Verify only the signed successor through normal production HTTPS auth
+        if: inputs.scene == 'auth'
+        run: >-
+          .build/android-auth-source/.venv/bin/python scripts/android_release_auth.py
+          --inputs .build/android-release-runtime/inputs --sdk "$ANDROID_HOME"
+          --java "$JAVA_HOME/bin/java" --output .build/android-release-runtime/evidence
+      - name: Stop only the original owned HTTPS auth origin
+        if: always() && inputs.scene == 'auth'
+        run: |
+          mkdir -p .build/android-release-runtime/origin-proof
+          python3 scripts/android_auth_hosted.py stop > .build/android-release-runtime/origin-proof/cleanup.json
       - name: Stop only this job's emulator
         if: always()
         run: |
@@ -128,12 +159,13 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: OpenNexus-signed-release-${{ inputs.scene == 'media' && 'media' || 'upgrade' }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: OpenNexus-signed-release-${{ inputs.scene == 'auth' && 'auth' || inputs.scene == 'media' && 'media' || 'upgrade' }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             .build/android-release-runtime/evidence/
             .build/android-release-runtime/emulator.log
             .build/android-release-runtime/emulator-version.txt
             .build/android-release-runtime/cleanup.json
+            .build/android-release-runtime/origin-proof/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
