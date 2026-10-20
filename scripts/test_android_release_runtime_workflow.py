@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+import shlex
+import tempfile
 from unittest.mock import patch
 import unittest
 import xml.etree.ElementTree as ET
@@ -74,6 +76,28 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         upload=next(s for s in steps if s.get('uses')=='actions/upload-artifact@v7')['with']['path']
         self.assertNotIn('owned-auth-',upload);self.assertNotIn('driver-build',upload);self.assertNotIn('android-auth-source',upload)
         self.assertIn('origin-proof/',upload)
+
+    def test_auth_preparation_creates_original_hosted_parent_before_service_admission(self):
+        from android_auth_hosted import HostedOrigin
+        step=next(s for s in self.flow()['jobs']['release-upgrade']['steps']
+                  if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
+        mkdir=next(shlex.split(line) for line in step['run'].splitlines() if line.startswith('mkdir -p '))
+        with tempfile.TemporaryDirectory() as folder:
+            workspace=Path(folder);private=workspace/'.build/android-runtime/owned-auth-unit'
+            origin=HostedOrigin(private)
+            with patch('android_auth_hosted.require_hosted'),patch.dict(os.environ,GITHUB_WORKSPACE=folder),patch('android_auth_hosted.subprocess.check_output',side_effect=RuntimeError('fixed service admission reached')) as identity,patch.object(origin,'spawn') as process,patch.object(origin,'start_container') as container:
+                # Actual HostedOrigin root admission fails before any source,
+                # process, Docker or network action when its parent is missing.
+                with self.assertRaises(FileNotFoundError):origin.prepare()
+                identity.assert_not_called();process.assert_not_called();container.assert_not_called()
+                self.assertIn('.build/android-runtime',mkdir[2:])
+                for relative in mkdir[2:]:
+                    target=workspace/relative
+                    self.assertTrue(target.resolve().is_relative_to(workspace.resolve()))
+                    target.mkdir(parents=True,exist_ok=True)
+                with self.assertRaisesRegex(RuntimeError,'fixed service admission reached'):origin.prepare()
+                identity.assert_called_once();process.assert_not_called();container.assert_not_called()
+                self.assertTrue((private/'home').is_dir());self.assertFalse((private/'owner-state.json').exists())
 
     def test_actual_admission_gate_rejects_branch_mismatch_dirty_source_or_unfrozen_pointer(self):
         steps=self.flow()['jobs']['fetch-inputs']['steps'];gate=next(s['run'] for s in steps if s.get('name','').startswith('Admit fixed'))

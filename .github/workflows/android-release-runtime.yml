@@ -98,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           uv sync --frozen --project .build/android-auth-source
-          mkdir -p .build/android-release-runtime/origin-proof
+          mkdir -p .build/android-runtime .build/android-release-runtime/origin-proof
           .build/android-auth-source/.venv/bin/python scripts/android_auth_hosted.py prepare > .build/android-release-runtime/origin-proof/origin.json
       - name: Prepare only this hosted emulator
         shell: bash
