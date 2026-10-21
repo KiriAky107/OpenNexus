@@ -275,7 +275,30 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
         click("Choose a vault");
         try { click(config.getString("vault_name")+" · 0"); }
         catch (Throwable error) { stage="choose-owned-vault"; throw error; }
-        previewMerge(); click("Confirm merge and bind");
+        previewMerge();
+        // A completed touch is not evidence that its asynchronous preview was
+        // produced. Observe it without the generic missing-target forward
+        // scroll, and never retry the original tap after an unknown result.
+        stage="wait-original-preview-before-confirm-search";
+        OriginalSyncPreview.await(()->{
+            int sections=0,confirmations=0,enabled=0,errors=0;boolean owned=true;
+            for(AccessibilityNodeInfo node:nodes()) {
+                if(node.isPassword() || node.isEditable())continue;
+                boolean section=label(node,"Initial merge preview"),confirm=label(node,"Confirm merge and bind");
+                if(section || confirm) {
+                    owned &= APP.equals(text(node.getPackageName()));
+                    if(section)sections++;
+                    if(confirm){confirmations++;if(node.isEnabled())enabled++;}
+                }
+                for(String code:diagnosticCodes())if(text(node.getText()).endsWith("("+code+")"))errors++;
+            }
+            return new OriginalSyncPreview.State(sections,confirmations,enabled,errors,owned);
+        },SystemClock::uptimeMillis,SystemClock::sleep,value->{
+            Bundle observation=new Bundle();
+            observation.putString("stream","OPENNEXUS_SYNC_PREVIEW_OBSERVATION "+value.summary()+"\n");
+            sendStatus(1,observation);
+        });
+        click("Confirm merge and bind");
         stage="review-original-association";
         waitPresent(node->label(node,config.optString("vault_id")));
         AccessibilityNodeInfo button=waitFor(node->label(node,"Confirm this association") && node.isEnabled(),true);
