@@ -65,22 +65,65 @@ class ReleaseCertificate(unittest.TestCase):
                 if mode == 'generation': native[0]['intents'][0]['generation'] += 1
                 with self.assertRaises(RuntimeError): runtime.validate_certificate(provider, native, cipher, origin, tls)
 
-    def test_only_closed_endpoint_is_staged_over_existing_private_stdin_route(self):
-        subject = object.__new__(runtime.ReleaseAuthCertificate)
-        subject.certificate = self.sequence()[3]
-        original = dict(endpoint='https://owned.trycloudflare.com', accounts=[dict(password='never-log-this')])
-        with patch.object(runtime.ReleaseAuth, 'stage_owned_input') as stage:
+    def owned_configuration(self):
+        return dict(endpoint='https://owned.trycloudflare.com',accounts=[
+            dict(username='android-owned-'+label+'-'+'a'*12,password='B'*48,device_name='Owned Android '+label)
+            for label in ('a','b')])
+
+    def input_subject(self):
+        from types import SimpleNamespace
+        subject=object.__new__(runtime.ReleaseAuthCertificate);subject.certificate=self.sequence()[3]
+        subject.args=SimpleNamespace(serial='emulator-5562');subject.shell=Mock();subject.device=Mock()
+        return subject
+
+    def test_actual_certificate_stdin_path_preserves_owned_identity_gate(self):
+        # Mock only the device boundary, not the inherited admission method.
+        # This catches a certificate config accidentally fed to the normal
+        # cloudflared-only gate before any actual hosted GUI can run.
+        subject=self.input_subject();original=self.owned_configuration()
+        with patch('android_auth_runtime.require_hosted_emulator'),patch.object(runtime,'require_hosted_emulator',create=True):
             subject.stage_owned_input(original)
-            actual = stage.call_args.args[0]
-            self.assertEqual(actual['endpoint'], runtime.ENDPOINT)
-            self.assertEqual(actual['scope'], 'owned-untrusted-certificate')
-            self.assertEqual(actual['certificate_sha256'], 'a'*64)
-            self.assertEqual(actual['accounts'], original['accounts'])
-        self.assertEqual(original['endpoint'], 'https://owned.trycloudflare.com')
-        subject.certificate['certificate_sha256'] = 'not-a-fingerprint'
-        with patch.object(runtime.ReleaseAuth, 'stage_owned_input') as stage, self.assertRaises(RuntimeError):
-            subject.stage_owned_input(original)
-        stage.assert_not_called()
+        subject.device.assert_called_once();args=subject.device.call_args
+        actual=json.loads(args.kwargs['input'])
+        self.assertEqual(actual,dict(original,endpoint=runtime.ENDPOINT,scope='owned-untrusted-certificate',certificate_sha256='a'*64))
+        self.assertEqual(args.args[:2],('shell','-T'));self.assertNotIn('B'*48,str(args.args))
+        self.assertIn('test ! -e no_backup/owned-auth.json',args.args[2])
+        self.assertEqual(original['endpoint'],'https://owned.trycloudflare.com')
+
+    def test_certificate_stdin_rejects_unowned_accounts_origin_or_fingerprint_before_device(self):
+        for mode in ('foreign-origin','extra-input','foreign-user','extra-account-field','short-password','bad-device-name','fingerprint','not-self-signed','SAN','trust-change'):
+            with self.subTest(mode=mode):
+                subject=self.input_subject();original=self.owned_configuration()
+                if mode=='foreign-origin':original['endpoint']='https://foreign.invalid'
+                if mode=='extra-input':original['arbitrary']='forbidden'
+                if mode=='foreign-user':original['accounts'][0]['username']='user-account'
+                if mode=='extra-account-field':original['accounts'][0]['token']='forbidden'
+                if mode=='short-password':original['accounts'][0]['password']='short'
+                if mode=='bad-device-name':original['accounts'][0]['device_name']='user phone'
+                if mode=='fingerprint':subject.certificate['certificate_sha256']='not-a-fingerprint'
+                if mode=='not-self-signed':subject.certificate['fresh_self_signed']=False
+                if mode=='SAN':subject.certificate['SAN_IPs']=['foreign.invalid']
+                if mode=='trust-change':subject.certificate['trust_store_modified']=True
+                with patch('android_auth_runtime.require_hosted_emulator'),patch.object(runtime,'require_hosted_emulator',create=True),self.assertRaises(RuntimeError):
+                    subject.stage_owned_input(original)
+                subject.shell.assert_not_called();subject.device.assert_not_called()
+
+    def test_normal_stdin_still_refuses_certificate_scope_and_local_or_foreign_endpoint(self):
+        subject=self.input_subject()
+        for mode in ('certificate','local','foreign','extra'):
+            original=self.owned_configuration()
+            if mode=='certificate':original.update(endpoint=runtime.ENDPOINT,scope='owned-untrusted-certificate',certificate_sha256='a'*64)
+            if mode=='local':original['endpoint']=runtime.ENDPOINT
+            if mode=='foreign':original['endpoint']='https://foreign.invalid'
+            if mode=='extra':original['scope']='forbidden'
+            with self.subTest(mode=mode),patch('android_auth_runtime.require_hosted_emulator'),self.assertRaises(RuntimeError):
+                runtime.ReleaseAuth.stage_owned_input(subject,original)
+            subject.shell.assert_not_called();subject.device.assert_not_called()
+        original=self.owned_configuration()
+        with patch('android_auth_runtime.require_hosted_emulator'):
+            runtime.ReleaseAuth.stage_owned_input(subject,original)
+        subject.device.assert_called_once()
+        self.assertEqual(json.loads(subject.device.call_args.kwargs['input']),original)
 
     def test_unknown_original_GUI_retains_TLS_outcome_and_closes_without_retry(self):
         with tempfile.TemporaryDirectory() as folder:

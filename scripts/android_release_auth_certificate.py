@@ -4,14 +4,15 @@ Only stopped nonsensitive auth projections and bounded cipher fingerprints
 leave the private observer. No CA, product, trust-store or permission changes.
 """
 from copy import deepcopy
+import json
 import os
 import re
 
-from android_auth_runtime import expect_requests, provider_account
+from android_auth_runtime import admit_owned_configuration, expect_requests, provider_account
 from android_certificate_probe import ENDPOINT, UntrustedOrigin, validate_rejected_handshake
 from android_release_auth import ReleaseAuth, main
 from android_release_observation import APP
-from android_runtime_probe import require
+from android_runtime_probe import DRIVER, require, require_hosted_emulator
 from release_plan import atomic_json, digest
 
 PHASES = ('invalid-certificate', 'certificate-cold-unusable')
@@ -58,9 +59,21 @@ class ReleaseAuthCertificate(ReleaseAuth):
     driver_namespace = 'RELEASE_AUTH_CERTIFICATE'
 
     def stage_owned_input(self, configuration):
-        require(re.fullmatch(r'[0-9a-f]{64}', self.certificate['certificate_sha256']), 'RELEASE_CERTIFICATE_INPUT_ORIGIN')
-        super().stage_owned_input(dict(configuration, endpoint=ENDPOINT, scope='owned-untrusted-certificate',
-                                      certificate_sha256=self.certificate['certificate_sha256']))
+        require_hosted_emulator(self.args.serial)
+        # Admit the original owned provider identities before substituting the
+        # one closed certificate endpoint. The normal input gate stays strict.
+        admit_owned_configuration(configuration)
+        require(re.fullmatch(r'[0-9a-f]{64}', self.certificate['certificate_sha256'])
+                and self.certificate['SAN_IPs'] == ['10.0.2.2', '127.0.0.1']
+                and self.certificate['fresh_self_signed'] is True
+                and self.certificate['runner_default_trust_rejected'] is True
+                and self.certificate['trust_store_modified'] is False, 'RELEASE_CERTIFICATE_INPUT_ORIGIN')
+        value = dict(configuration, endpoint=ENDPOINT, scope='owned-untrusted-certificate',
+                     certificate_sha256=self.certificate['certificate_sha256'])
+        self.shell('run-as', DRIVER, 'mkdir', '-p', 'no_backup')
+        self.device('shell', '-T', 'run-as '+DRIVER+' sh -c '+
+                    "'umask 077; test ! -e no_backup/owned-auth.json && cat > no_backup/owned-auth.json'",
+                    input=json.dumps(value).encode())
 
     def run(self):
         server = UntrustedOrigin(self.owner)

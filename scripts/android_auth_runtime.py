@@ -19,6 +19,19 @@ from android_auth_fixture import arm_control, atomic_json, observe_provider, own
 from android_runtime_probe import APP, DRIVER, Probe, build_job_origin, require, require_hosted_emulator, validate_binding
 
 
+def admit_owned_configuration(configuration):
+    """Validate only the original private hosted fixture, without device I/O."""
+    require(set(configuration)=={'endpoint','accounts'} and re.fullmatch(
+        r'https://[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com',configuration['endpoint']),
+        'Exclusive owned HTTPS input required')
+    accounts=configuration['accounts'];require(len(accounts)==2,'Exclusive owned identities required')
+    for index,account in enumerate(accounts):
+        require(set(account)=={'username','password','device_name'} and re.fullmatch(
+            'android-owned-'+('a' if index==0 else 'b')+'-[0-9a-f]{12}',account['username'])
+            and re.fullmatch(r'[A-Za-z0-9_-]{40,100}',account['password'])
+            and account['device_name'].startswith('Owned Android '),'Exclusive owned identity input required')
+
+
 def provider_account(observation,index):
     users=observation.get('users',[])
     require(len(users)==2,'Owned provider identity count changed')
@@ -217,15 +230,7 @@ class AuthProbe(Probe):
 
     def stage_owned_input(self,configuration):
         require_hosted_emulator(self.args.serial)
-        require(set(configuration)=={'endpoint','accounts'} and re.fullmatch(
-            r'https://[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com',configuration['endpoint']),
-            'Exclusive owned HTTPS input required')
-        accounts=configuration['accounts'];require(len(accounts)==2,'Exclusive owned identities required')
-        for index,account in enumerate(accounts):
-            require(set(account)=={'username','password','device_name'} and re.fullmatch(
-                'android-owned-'+('a' if index==0 else 'b')+'-[0-9a-f]{12}',account['username'])
-                and re.fullmatch(r'[A-Za-z0-9_-]{40,100}',account['password'])
-                and account['device_name'].startswith('Owned Android '),'Exclusive owned identity input required')
+        admit_owned_configuration(configuration)
         self.shell('run-as',DRIVER,'mkdir','-p','no_backup')
         self.device('shell','-T','run-as '+DRIVER+' sh -c '+"'umask 077; test ! -e no_backup/owned-auth.json && cat > no_backup/owned-auth.json'",
             input=json.dumps(configuration).encode())
