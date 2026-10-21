@@ -48,6 +48,7 @@ export const useSettingsStore = defineStore('settings', () => {
   // 权限
   const permissionPolicy = ref<Record<string, 'allow' | 'confirm' | 'deny'>>({})
   const diagnosticsError = ref<string | null>(null)
+  let diagnosticsGeneration = 0
 
   watch(() => ({
     restoreLastVault: restoreLastVault.value, autoSaveInterval: autoSaveInterval.value,
@@ -60,9 +61,11 @@ export const useSettingsStore = defineStore('settings', () => {
   }), (value) => localStorage.setItem('app-settings', JSON.stringify(value)), { deep: true })
 
   async function loadDiagnostics() {
+    const generation = ++diagnosticsGeneration
     const results = await Promise.allSettled([
       systemService.healthCheck(), systemService.getStatus(), indexService.getIndexStatus(), systemService.getPermissionPolicy(),
     ])
+    if (generation !== diagnosticsGeneration) return
     const [health, status, index, policy] = results
     aiCoreStatus.value = health.status === 'fulfilled' && health.value.status === 'ok' ? 'running' : 'error'
     aiCoreVersion.value = status.status === 'fulfilled' ? status.value.version : '—'
