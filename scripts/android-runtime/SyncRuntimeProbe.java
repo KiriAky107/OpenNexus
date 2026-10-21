@@ -14,7 +14,9 @@ import java.util.UUID;
 import org.json.JSONObject;
 
 /** Actual Sync UI commands, never an HTTP/native/file-operation bridge to the product. */
-public final class SyncRuntimeProbe extends AuthRuntimeProbe {
+public class SyncRuntimeProbe extends AuthRuntimeProbe {
+    public SyncRuntimeProbe() { this(false); }
+    protected SyncRuntimeProbe(boolean release) { super(release); }
     @Override protected String namespace() { return "SYNC"; }
     @Override protected boolean viewportAdmission() { return true; }
     @Override protected String[] diagnosticCodes() {
@@ -182,7 +184,7 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         LinkedHashSet<String> result=new LinkedHashSet<>();List<AccessibilityNodeInfo> pending=new ArrayList<>();pending.add(root);
         for(int i=0;i<pending.size() && pending.size()<256;i++) {
             AccessibilityNodeInfo node=pending.get(i);
-            require("cc.kronecker.opennexus.dev".equals(text(node.getPackageName())) && !node.isPassword(),"Foreign conflict review");
+            admitReviewPackage(node.getPackageName(),node.isPassword());
             String value=text(node.getText());if(value.matches(pattern))result.add(value);
             for(int j=0;j<node.getChildCount();j++){AccessibilityNodeInfo child=node.getChild(j);if(child!=null)pending.add(child);}
         }
@@ -286,7 +288,7 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         List<AccessibilityNodeInfo> children=new ArrayList<>();children.add(dialog);
         for (int i=0;i<children.size() && children.size()<128;i++) {
             AccessibilityNodeInfo node=children.get(i);String value=text(node.getText());
-            require("cc.kronecker.opennexus.dev".equals(text(node.getPackageName())) && !node.isPassword(),"Foreign frozen review");
+            admitReviewPackage(node.getPackageName(),node.isPassword());
             if (value.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) ids.add(value);
             if (value.matches("[0-9a-f]{64}")) digests.add(value);
             for (int j=0;j<node.getChildCount();j++) { AccessibilityNodeInfo child=node.getChild(j);if(child!=null) children.add(child); }
@@ -297,6 +299,10 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         click("Confirm this association");
         waitPresent(node->text(node.getText()).startsWith("Associated remote vault")
             && text(node.getText()).contains(config.optString("vault_id")));
+    }
+
+    protected final void admitReviewPackage(CharSequence packageName,boolean password) {
+        require(APP.equals(text(packageName)) && !password,"Foreign frozen or conflict review");
     }
 
     private void persistOnce(String kind,JSONObject original) throws Exception {
