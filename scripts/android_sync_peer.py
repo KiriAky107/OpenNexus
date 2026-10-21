@@ -29,6 +29,7 @@ def revision_matches(value,body,device,vault):
 
 
 class Peer:
+    paths = PATHS
     def __init__(self,owner):
         self.setup=Setup(owner)
         original.require((self.setup.root/'login-response.private.json').is_file()
@@ -122,7 +123,7 @@ class Peer:
                 operation=operation,retry_original=retry_original)
 
     def _publish(self,label,path,content,*,file_id=None,base_revision=0,operation='put',retry_original=False):
-        original.require(re.fullmatch(r'[a-z][a-z0-9-]{0,31}',label) and path in PATHS
+        original.require(re.fullmatch(r'[a-z][a-z0-9-]{0,31}',label) and path in self.paths
             and isinstance(content,bytes) and len(content)<=1024*1024 and type(base_revision) is int
             and 0<=base_revision<=9007199254740991 and operation in ('put','delete')
             and (operation!='delete' or content==b''),'OWNED_PEER_ACTION_INVALID')

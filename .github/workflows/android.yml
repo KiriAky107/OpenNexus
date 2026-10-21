@@ -68,7 +68,7 @@ on:
       release_runtime_scene:
         description: 'Signed runtime only: original upgrade, successor media, normal auth, lost refresh or held-background delivery.'
         type: choice
-        options: [upgrade, media, auth, auth-recovery, auth-background, auth-certificate]
+        options: [upgrade, media, auth, auth-recovery, auth-background, auth-certificate, sync]
         default: upgrade
         required: false
       release_runtime_input:
