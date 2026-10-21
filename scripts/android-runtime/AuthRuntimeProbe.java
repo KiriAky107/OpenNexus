@@ -270,11 +270,7 @@ public class AuthRuntimeProbe extends Instrumentation {
             out.write("ready\n".getBytes(StandardCharsets.UTF_8));out.getFD().sync();
         }
         File finish=new File(root,"owned-auth-held.finish");
-        long until=SystemClock.uptimeMillis()+90000;
-        while (!finish.isFile() && SystemClock.uptimeMillis()<until) SystemClock.sleep(100);
-        require(finish.isFile() && finish.length()==7,"Original background signal missing");
-        byte[] signal=java.nio.file.Files.readAllBytes(finish.toPath());
-        require(java.util.Arrays.equals(signal,"finish\n".getBytes(StandardCharsets.UTF_8)),"Original background signal changed");
+        OriginalAuthSignal.await(finish,SystemClock::uptimeMillis,SystemClock::sleep);
     }
     protected void click(String name) {
         if(!"none".equals(inputTarget)) {

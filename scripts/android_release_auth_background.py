@@ -69,23 +69,22 @@ class ReleaseAuthBackground(ReleaseAuth):
     control = AuthProbe.control
 
     def finish_held_driver(self):
-        # Publishing the destination with `cat > finish` exposes a zero-length
-        # file to the driver's existence check before cat writes its bytes.
-        # Complete and validate one fresh staging file, then link it atomically
-        # without replacing any existing original signal.
-        temporary = 'no_backup/owned-auth-held.finish.tmp'
+        # Use the original ADB stdin operation, with no hard-link dependency.
+        # The driver now waits for the complete bounded signal, including when
+        # the file first appears empty. No retry or replacement is permitted.
         final = 'no_backup/owned-auth-held.finish'
-        script = ('umask 077; test ! -e ' + temporary + ' && test ! -e ' + final +
-                  ' && cat > ' + temporary + ' && test "$(stat -c %s ' + temporary + ')" = 7' +
-                  ' && test "$(cat ' + temporary + ')" = finish && ln ' + temporary + ' ' + final + ' && rm ' + temporary)
+        script = 'umask 077; test ! -e ' + final + ' && cat > ' + final
         args = ('shell', '-T', shlex.join(('run-as', DRIVER, 'sh', '-c', script)))
         atomic_json(self.output / 'held-finish-intent.json', dict(arguments=list(args), input_bytes=7,
-            original_once=True, automatic_retry=False, complete_before_atomic_publish=True))
+            original_once=True, automatic_retry=False, driver_waits_for_complete_bounded_signal=True))
         try:
             result = self.device(*args, input=b'finish\n', timeout=15, check=False)
         except subprocess.TimeoutExpired:
             atomic_json(self.output / 'held-finish-result.json', dict(returncode=None, unknown_result=True, automatic_retry=False))
             raise
+        require(len(result.stdout) <= 4096 and len(result.stderr) <= 4096, 'RELEASE_BACKGROUND_STATIC_SIGNAL_OUTPUT_BOUND')
+        exclusive(self.output / 'held-finish.stdout', result.stdout)
+        exclusive(self.output / 'held-finish.stderr', result.stderr)
         atomic_json(self.output / 'held-finish-result.json', dict(returncode=result.returncode, unknown_result=False, automatic_retry=False))
         require(result.returncode == 0, 'RELEASE_BACKGROUND_ORIGINAL_FINISH_PUBLISH_FAILED')
         observed = self.shell('run-as', DRIVER, 'cat', final, check=False)

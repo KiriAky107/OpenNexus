@@ -31,7 +31,7 @@ class OriginalFinishSignal(unittest.TestCase):
         self.assertEqual(len(words), 5)
         return words[4]
 
-    def test_no_partial_signal_visible_during_actual_stdin_write_and_original_is_never_replaced(self):
+    def test_original_stdin_write_and_exact_readback_without_replacing_an_existing_signal(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); subject = self.subject(root); calls = []
             def device(*args, **kwargs):
@@ -39,29 +39,28 @@ class OriginalFinishSignal(unittest.TestCase):
                 process = subprocess.Popen([str(self.shell_path()), '-c', script], cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 process.stdin.write(b'f'); process.stdin.flush()
                 deadline = time.monotonic() + 3
-                while not (root / 'no_backup/owned-auth-held.finish.tmp').exists():
+                while not (root / 'no_backup/owned-auth-held.finish').exists() or (root / 'no_backup/owned-auth-held.finish').stat().st_size == 0:
                     self.assertLess(time.monotonic(), deadline); time.sleep(.01)
-                # The old direct publication made its final file visible here.
-                self.assertFalse((root / 'no_backup/owned-auth-held.finish').exists())
+                # The actual Java reader now keeps waiting through this prefix.
+                self.assertEqual((root / 'no_backup/owned-auth-held.finish').read_bytes(), b'f')
                 process.stdin.write(kwargs['input'][1:]); process.stdin.close(); process.stdin = None
                 stdout, stderr = process.communicate(timeout=5)
                 return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
             subject.device = device; subject.finish_held_driver()
             final = root / 'no_backup/owned-auth-held.finish'
             self.assertEqual(final.read_bytes(), b'finish\n'); self.assertEqual(len(calls), 1)
-            self.assertFalse((root / 'no_backup/owned-auth-held.finish.tmp').exists())
             script = self.actual_script(calls[0])
+            self.assertNotIn('ln ',script); self.assertNotIn('stat ',script)
             again = subprocess.run([str(self.shell_path()), '-c', script], cwd=root, input=b'finish\n', capture_output=True, timeout=5)
             self.assertNotEqual(again.returncode, 0); self.assertEqual(final.read_bytes(), b'finish\n')
 
-    def test_wrong_same_length_staging_bytes_cannot_be_published(self):
+    def test_wrong_same_length_bytes_fail_exact_readback_and_leave_the_original(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); subject = self.subject(root)
             subject.device = lambda *args, **kwargs: subprocess.run([str(self.shell_path()), '-c', self.actual_script(args)],
                 cwd=root, input=b'finishx', capture_output=True, timeout=5)
-            with self.assertRaisesRegex(RuntimeError, 'FINISH_PUBLISH_FAILED'): subject.finish_held_driver()
-            self.assertFalse((root / 'no_backup/owned-auth-held.finish').exists())
-            self.assertEqual((root / 'no_backup/owned-auth-held.finish.tmp').read_bytes(), b'finishx')
+            with self.assertRaisesRegex(RuntimeError, 'FINISH_READBACK'): subject.finish_held_driver()
+            self.assertEqual((root / 'no_backup/owned-auth-held.finish').read_bytes(), b'finishx')
 
     def test_timeout_preserves_unknown_original_without_retry_or_false_readback(self):
         with tempfile.TemporaryDirectory() as folder:
