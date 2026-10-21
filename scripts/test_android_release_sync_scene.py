@@ -34,7 +34,8 @@ class ReleaseSyncEntry(unittest.TestCase):
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value,'utf-8');paths.append(str(path))
             self.compile([str(javac),'-J-Xmx128m','-encoding','UTF-8','-classpath',str(actual)+os.pathsep+str(sdk),
                 '-d',str(harness),*paths,str(ROOT/'android-runtime-tests/ReleaseSyncEntryCheck.java'),
-                str(ROOT/'android-runtime-tests/OriginalSyncPreviewCheck.java')])
+                str(ROOT/'android-runtime-tests/OriginalSyncPreviewCheck.java'),
+                str(ROOT/'android-runtime-tests/OriginalCycleInputCheck.java')])
             result=subprocess.run([str(java),'-Xmx64m','-cp',os.pathsep.join(map(str,(harness,actual,sdk))),
                 'cc.kronecker.opennexus.testdriver.ReleaseSyncEntryCheck'],capture_output=True,timeout=15)
             self.assertEqual(result.returncode,0,result.stderr.decode('utf-8','replace'))
@@ -43,6 +44,10 @@ class ReleaseSyncEntry(unittest.TestCase):
                 'cc.kronecker.opennexus.testdriver.OriginalSyncPreviewCheck'],capture_output=True,timeout=15)
             self.assertEqual(preview.returncode,0,preview.stderr.decode('utf-8','replace'))
             self.assertIn(b'ORIGINAL_SYNC_PREVIEW_OK checks=7 actual_Android_preview=0 input_replayed=0',preview.stdout)
+            cycle=subprocess.run([str(java),'-Xmx64m','-cp',os.pathsep.join(map(str,(harness,actual,sdk))),
+                'cc.kronecker.opennexus.testdriver.OriginalCycleInputCheck'],capture_output=True,timeout=15)
+            self.assertEqual(cycle.returncode,0,cycle.stderr.decode('utf-8','replace'))
+            self.assertIn(b'ORIGINAL_CYCLE_INPUT_OK checks=7 actual_Android_or_Native_cycle=0',cycle.stdout)
             for path in sources:
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),inventory[path.relative_to(ROOT.parent).as_posix()]['sha256'])
             # A caller may retain this public source/compile-only record from
@@ -51,6 +56,7 @@ class ReleaseSyncEntry(unittest.TestCase):
                 SDK_jar_sha256=hashlib.sha256(sdk.read_bytes()).hexdigest(),actual_compile_inputs=inventory,
                 compiler_max_heap_MiB=128,actual_JVM_entry_stdout=result.stdout.decode('ascii').strip(),
                 actual_JVM_preview_wait_stdout=preview.stdout.decode('ascii').strip(),
+                actual_JVM_cycle_input_stdout=cycle.stdout.decode('ascii').strip(),
                 actual_API36_driver_inputs=len(sources),actual_Android_sync_verified=False)))
 
     def test_separate_driver_manifest_only_and_NO_product_permission_change(self):

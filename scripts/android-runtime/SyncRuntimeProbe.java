@@ -1,6 +1,7 @@
 package cc.kronecker.opennexus.testdriver;
 
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityEvent;
 import android.os.SystemClock;
 import android.os.Bundle;
 import java.io.File;
@@ -80,9 +81,25 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
         // These are not substituted for native invocation or file-operation IDs.
         persistOnce(original,new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
             .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
-        startOriginalCycleTouch(original);
-        stage="wait-original-cycle-completion-"+original;
-        waitPresent(node->label(node,"Cycle completed"));
+        OriginalCycleInput observation=new OriginalCycleInput();
+        final android.app.UiAutomation originalAutomation=getUiAutomation();
+        originalAutomation.setOnAccessibilityEventListener(event->{
+            boolean owned=APP.equals(text(event.getPackageName()));
+            boolean clicked=event.getEventType()==AccessibilityEvent.TYPE_VIEW_CLICKED,exact=false;
+            if(owned && clicked)for(CharSequence value:event.getText())
+                if("Sync one cycle now".equals(text(value)))exact=true;
+            // Discard every raw event field. Only fixed bounded counts survive.
+            observation.event(owned,clicked,exact,event.getEventType()==AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+        });
+        try {
+            observation.dispatch(()->startOriginalCycleTouch(original));
+            stage="wait-original-cycle-completion-"+original;
+            waitPresent(node->label(node,"Cycle completed"));
+        } finally {
+            originalAutomation.setOnAccessibilityEventListener(null);
+            Bundle facts=new Bundle();facts.putString("stream","OPENNEXUS_SYNC_ORIGINAL_CYCLE_INPUT "+observation.closeAndSummary()+"\n");
+            sendStatus(1,facts);
+        }
     }
     private void startOriginalCycleTouch(String original) throws Exception {
         String mode=originalCycleInputMode();
