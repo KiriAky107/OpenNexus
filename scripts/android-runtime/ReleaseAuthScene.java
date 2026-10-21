@@ -1,6 +1,6 @@
 package cc.kronecker.opennexus.testdriver;
 
-/** Closed normal, lost-response and background auth sequences, not arbitrary auth or Sync phases. */
+/** Closed auth sequences, not arbitrary auth or Sync phases. */
 final class ReleaseAuthScene {
     private ReleaseAuthScene() {}
     static boolean allowed(String phase) {
@@ -12,5 +12,8 @@ final class ReleaseAuthScene {
     }
     static boolean recoveryAllowed(String phase) {
         return "login-a".equals(phase) || "refresh-unknown".equals(phase) || "current-unusable".equals(phase);
+    }
+    static boolean certificateAllowed(String phase) {
+        return "invalid-certificate".equals(phase) || "certificate-cold-unusable".equals(phase);
     }
 }
