@@ -14,7 +14,7 @@ public final class ReleaseSyncRuntimeProbe extends SyncRuntimeProbe {
         super.onCreate(args);
     }
     @Override protected String namespace() { return "RELEASE_SYNC"; }
-    @Override protected boolean nativeAccessibilityClick(String name) {
+    @Override protected boolean hostedCycleTouch(String name) {
         return "Sync one cycle now".equals(name);
     }
 }

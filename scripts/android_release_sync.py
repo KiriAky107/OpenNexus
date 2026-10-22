@@ -19,6 +19,7 @@ from android_runtime_probe import BODY, DRIVER, IMAGE_BYTES, NODE, require, requ
 from android_sync_fixture import observe_provider
 from android_sync_peer import Peer
 from android_sync_setup import Setup
+from android_sync_host_touch import run_hosted_cycle
 # Reuse only this bounded immutable-object GET, never the debug SyncProbe.
 from android_sync_runtime import read_original_object
 from release_plan import atomic_json, digest
@@ -118,6 +119,10 @@ class ReleaseSync(ReleaseAuth):
     allowed_phases = PHASES
     driver_entry = 'ReleaseSyncRuntimeProbe'
     driver_namespace = 'RELEASE_SYNC'
+
+    def phase(self, phase, label):
+        if phase in ('cycle', 'cycle-incoming'): return run_hosted_cycle(self, phase, label)
+        return super().phase(phase, label)
 
     def stage_sync_input(self, vault):
         require_hosted_emulator(self.args.serial)
@@ -225,7 +230,7 @@ class ReleaseSync(ReleaseAuth):
             original_Save_ids=[v[0]['operation_id'] for v in saves], original_association=frozen,
             original_uploaded_operation_ids=[v['operation_id'] for v in uploaded['native']['jobs']], original_peer_receipts=receipts,
             actual_GUI_foreground_upload_and_peer_Native_apply_bytes=True, cold_sync_metadata_and_original_bytes_preserved=True,
-            cycle_input_kind='native_accessibility_click', physical_cycle_touch_verified=False,
+            cycle_input_kind='hosted_adb_touchscreen_tap', hosted_cycle_touch_verified=True, physical_cycle_touch_verified=False,
             original_touch_failure_cause_confirmed=False,
             Native_RAM_invocation_id_observed=False, incoming_editor_render_reopen_verified=False,
             private_auth_DB_or_ciphertext_or_UI_or_credentials_exported=False, only_successor_installed=True,

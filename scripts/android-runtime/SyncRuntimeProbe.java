@@ -80,7 +80,8 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
         waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
         // Distinct explicit cycles have separate once-only driver intents.
         // These are not substituted for native invocation or file-operation IDs.
-        persistOnce(original,new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
+        originalCyclePhase=original;originalCycleIntent=UUID.randomUUID().toString();
+        persistOnce(original,new JSONObject().put("driver_intent_id",originalCycleIntent)
             .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
         OriginalCycleInput observation=new OriginalCycleInput();
         final android.app.UiAutomation originalAutomation=getUiAutomation();
@@ -98,11 +99,27 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
             waitPresent(node->label(node,"Cycle completed"));
         } finally {
             originalAutomation.setOnAccessibilityEventListener(null);
-            String inputKind=nativeAccessibilityClick("Sync one cycle now")?"native_accessibility_click":"physical_touch";
+            String inputKind=hostedCycleTouch("Sync one cycle now")?"hosted_adb_touchscreen_tap"
+                :nativeAccessibilityClick("Sync one cycle now")?"native_accessibility_click":"physical_touch";
             Bundle facts=new Bundle();facts.putString("stream","OPENNEXUS_SYNC_ORIGINAL_CYCLE_INPUT "+observation.closeAndSummary()
                 +" input_method="+inputKind+" physical_touch="+inputKind.equals("physical_touch")+"\n");
             sendStatus(1,facts);
         }
+    }
+    private String originalCyclePhase,originalCycleIntent;
+    @Override protected void awaitHostedCycleTouch(android.graphics.Rect original,android.graphics.Rect hit,int window) {
+        require(APP.equals("cc.kronecker.opennexus") && ("cycle".equals(originalCyclePhase)||"cycle-incoming".equals(originalCyclePhase))
+            && canonical(originalCycleIntent),"Unscoped hosted cycle input");
+        try {
+            org.json.JSONArray full=new org.json.JSONArray(),visible=new org.json.JSONArray();
+            for(int n:new int[]{original.left,original.top,original.right,original.bottom})full.put(n);
+            for(int n:new int[]{hit.left,hit.top,hit.right,hit.bottom})visible.put(n);
+            persistOnce("touch-ready-"+originalCyclePhase,new JSONObject().put("driver_intent_id",originalCycleIntent)
+                .put("phase",originalCyclePhase).put("package",APP).put("window",window).put("original",full).put("visible",visible)
+                .put("x",hit.centerX()).put("y",hit.centerY()).put("elapsed_ms",SystemClock.elapsedRealtime()));
+            File finish=new File(getContext().getNoBackupFilesDir(),"owned-sync-touch-"+originalCycleIntent+".finish");
+            OriginalAuthSignal.await(finish,SystemClock::uptimeMillis,SystemClock::sleep);
+        } catch(Exception error) { throw new IllegalStateException("Original hosted cycle input did not finish"); }
     }
     private void startOriginalCycleTouch(String original) throws Exception {
         String mode=originalCycleInputMode();

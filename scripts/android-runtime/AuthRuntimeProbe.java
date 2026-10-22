@@ -99,6 +99,10 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected boolean viewportAdmission() { return false; }
     protected long touchSettleMillis() { return 150; }
     protected boolean nativeAccessibilityClick(String name) { return false; }
+    protected boolean hostedCycleTouch(String name) { return false; }
+    protected void awaitHostedCycleTouch(Rect original,Rect hit,int window) {
+        throw new IllegalStateException("No hosted cycle input policy");
+    }
 
     protected final String originalCycleInputMode() { return args.getString("cycle_input","touch"); }
     protected final String originalCycleDispatchId() { return args.getString("cycle_dispatch_id",""); }
@@ -333,7 +337,7 @@ public class AuthRuntimeProbe extends Instrumentation {
             +" required_stable_ms="+settleMillis+" observed_original_stable_ms="+stability.stableForMillis()
             +" observed_visible_stable_ms="+visibleStability.stableForMillis();
         inputTrace=admitted+" down=not_sent up=not_sent";
-        if(nativeAccessibilityClick(name)) {
+        if(nativeAccessibilityClick(name) || hostedCycleTouch(name)) {
             // A different, explicitly recorded GUI input path. Never fall back
             // to a touch after an accepted, refused, or unknown action result.
             AccessibilityNodeInfo original=unique(target);Rect fresh=new Rect();original.getBoundsInScreen(fresh);
@@ -341,12 +345,19 @@ public class AuthRuntimeProbe extends Instrumentation {
             require(APP.equals(text(original.getPackageName())) && original.isEnabled() && original.isClickable()
                 && original.getWindowId()==admittedWindow && fresh.equals(before) && freshVisible!=null && freshVisible.equals(hit),
                 "Original accessible target changed after admission; no action sent");
+            if(hostedCycleTouch(name)) {
+                stage="original-hosted-cycle-touch";
+                inputTrace=admitted+" hosted_touch=ready physical_touch=not_sent automatic_retry=false";
+                awaitHostedCycleTouch(before,hit,admittedWindow);
+                inputTrace=admitted+" hosted_touch=original_command_returned physical_touch=not_sent automatic_retry=false";
+            } else {
             stage="single-native-accessibility-"+name.replace(' ','-');
             inputTrace=admitted+" native_accessibility=attempted physical_touch=not_sent automatic_retry=false";
             boolean accepted=original.performAction(AccessibilityNodeInfo.ACTION_CLICK);
             inputTrace=admitted+" native_accessibility="+(accepted?"accepted":"refused")
                 +" physical_touch=not_sent automatic_retry=false";
             require(accepted,"Original accessibility action refused; no fallback or retry");
+            }
         } else {
         stage="single-touch-down-"+name.replace(' ','-');
         inputTrace=admitted+" down=attempted_without_confirmation up=not_sent";
