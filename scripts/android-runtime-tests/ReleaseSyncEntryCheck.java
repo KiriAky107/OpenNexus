@@ -11,6 +11,9 @@ public final class ReleaseSyncEntryCheck {
         int accepted=0,refused=0,packages=0;
         need(new SyncRuntimeProbe().APP.equals("cc.kronecker.opennexus.dev"));
         need(new SyncRuntimeProbe().namespace().equals("SYNC"));
+        need(new AuthRuntimeProbe().touchSettleMillis()==150);
+        need(new SyncRuntimeProbe().touchSettleMillis()==600);
+        need(new ReleaseSyncRuntimeProbe().touchSettleMillis()==600);
         for(String value:new String[]{"login-a","associate","association-original","status","cycle","cycle-incoming"}) {
             ReleaseSyncRuntimeProbe entry=new ReleaseSyncRuntimeProbe();
             need(entry.APP.equals("cc.kronecker.opennexus") && entry.namespace().equals("RELEASE_SYNC"));

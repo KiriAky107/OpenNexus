@@ -97,6 +97,7 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected String[] diagnosticLabels() { return new String[0]; }
     protected String[] diagnosticCodes() { return new String[0]; }
     protected boolean viewportAdmission() { return false; }
+    protected long touchSettleMillis() { return 150; }
 
     protected final String originalCycleInputMode() { return args.getString("cycle_input","touch"); }
     protected final String originalCycleDispatchId() { return args.getString("cycle_dispatch_id",""); }
@@ -302,7 +303,8 @@ public class AuthRuntimeProbe extends Instrumentation {
         // Selecting a remote vault triggers a read-only association status and
         // an accessibility scroll. Observe those layout changes before input;
         // do not abort on the first moved frame or ever re-tap after dispatch.
-        TargetStability stability=new TargetStability(),visibleStability=new TargetStability();
+        final long settleMillis=touchSettleMillis();
+        TargetStability stability=new TargetStability(settleMillis),visibleStability=new TargetStability(settleMillis);
         TouchViewport.RevealBudget reveal=new TouchViewport.RevealBudget();
         long until=SystemClock.uptimeMillis()+5000;Rect before=new Rect(),hit=new Rect();boolean stable=false;
         do {
@@ -326,15 +328,18 @@ public class AuthRuntimeProbe extends Instrumentation {
             SystemClock.sleep(80);
         } while (SystemClock.uptimeMillis()<until);
         require(stable,"Named button did not settle before the bounded deadline; no input sent");
-        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=not_sent up=not_sent";
+        String admitted="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()
+            +" required_stable_ms="+settleMillis+" observed_original_stable_ms="+stability.stableForMillis()
+            +" observed_visible_stable_ms="+visibleStability.stableForMillis();
+        inputTrace=admitted+" down=not_sent up=not_sent";
         stage="single-touch-down-"+name.replace(' ','-');
-        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=attempted_without_confirmation up=not_sent";
+        inputTrace=admitted+" down=attempted_without_confirmation up=not_sent";
         long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,hit.centerX(),hit.centerY());
-        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=accepted up=not_sent";
+        inputTrace=admitted+" down=accepted up=not_sent";
         stage="single-touch-up-"+name.replace(' ','-');
-        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=accepted up=attempted_without_confirmation";
+        inputTrace=admitted+" down=accepted up=attempted_without_confirmation";
         SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,hit.centerX(),hit.centerY());
-        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=accepted up=accepted";
+        inputTrace=admitted+" down=accepted up=accepted";
         stage="wait-idle-after-single-touch-"+name.replace(' ','-');
         try { ui.waitForIdle(150,5000); }
         catch (java.util.concurrent.TimeoutException error) {

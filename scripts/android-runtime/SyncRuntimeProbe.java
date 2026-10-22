@@ -20,6 +20,7 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
     protected SyncRuntimeProbe(boolean release) { super(release); }
     @Override protected String namespace() { return "SYNC"; }
     @Override protected boolean viewportAdmission() { return true; }
+    @Override protected long touchSettleMillis() { return 600; }
     @Override protected String[] diagnosticCodes() {
         return new String[]{"SYNC_RESPONSE_INVALID","SYNC_NETWORK_ERROR","SYNC_CONNECTION_FAILED","SYNC_AUTH_SELECTION_CHANGED",
             "SYNC_AUTH_IDENTITY_CHANGED","SYNC_AUTH_RECONCILIATION_REQUIRED","SYNC_SESSION_EXPIRED","SYNC_LOGIN_REQUIRED",

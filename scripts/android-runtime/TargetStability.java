@@ -4,6 +4,14 @@ package cc.kronecker.opennexus.testdriver;
 final class TargetStability {
     private int left, top, right, bottom, samples;
     private long since, last;
+    private final long minimumMillis;
+
+    TargetStability() { this(150); }
+    TargetStability(long minimumMillis) {
+        if(minimumMillis<150 || minimumMillis>1000)throw new IllegalArgumentException("Unbounded pre-input stability policy");
+        this.minimumMillis=minimumMillis;
+    }
+    long stableForMillis() { return samples==0 ? 0 : Math.max(0,last-since); }
 
     boolean observe(int l, int t, int r, int b, long now) {
         if (r <= l || b <= t || now < 0) { samples = 0; return false; }
@@ -12,6 +20,6 @@ final class TargetStability {
             return false;
         }
         last = now; samples++;
-        return samples >= 3 && now - since >= 150;
+        return samples >= 3 && now - since >= minimumMillis;
     }
 }
