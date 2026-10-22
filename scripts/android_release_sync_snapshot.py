@@ -42,8 +42,13 @@ def rows(db, sql, args=()):
 
 
 def project_sync(snapshot, working, *, incoming=False):
-    snapshot, working = Path(snapshot).resolve(), Path(working).resolve()
     paths = owned_paths(incoming)
+    return _project_owned(snapshot, working, paths)
+
+
+def _project_owned(snapshot, working, paths):
+    """Common raw-copy/closed-column reader, without seed or Save assumptions."""
+    snapshot, working = Path(snapshot).resolve(), Path(working).resolve()
     admit_attachment(ASSET)
     expected = {'vault/' + path for path in paths} | {db + suffix for db in DATABASES for suffix in ('', '-wal', '-shm')}
     manifest = json.loads((snapshot / 'snapshot.json').read_bytes())

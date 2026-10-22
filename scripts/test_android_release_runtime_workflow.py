@@ -33,7 +33,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
     def test_media_scene_uses_only_successor_script_and_unknown_scene_is_rejected_before_read(self):
         caller=yaml.load((ROOT/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
         option=caller['on']['workflow_dispatch']['inputs']['release_runtime_scene']
-        self.assertEqual(option['options'],['upgrade','media','auth','auth-recovery','auth-background','auth-certificate','sync']);self.assertEqual(option['default'],'upgrade')
+        self.assertEqual(option['options'],['upgrade','media','auth','auth-recovery','auth-background','auth-certificate','sync','sync-read']);self.assertEqual(option['default'],'upgrade')
         self.assertLessEqual(len(caller['on']['workflow_dispatch']['inputs']),25)
         flow=self.flow();self.assertEqual(flow['on']['workflow_call']['inputs']['scene']['default'],'upgrade')
         steps=flow['jobs']['release-upgrade']['steps']
@@ -64,7 +64,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
     def test_auth_origin_is_fixed_and_private_provider_paths_are_never_uploaded(self):
         runtime=self.flow()['jobs']['release-upgrade'];steps=runtime['steps']
         checkout=next(s for s in steps if s.get('with',{}).get('repository')=='KiriAky107/Sync-for-OpenNexus')
-        self.assertEqual(checkout['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync'")
+        self.assertEqual(checkout['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read'")
         self.assertEqual(checkout['with']['ref'],'29e2e6d373ea752352981bdad05d34a7a0d9c3d9')
         self.assertEqual(checkout['with']['persist-credentials'],'false')
         auth=next(s for s in steps if 'android_release_auth.py' in s.get('run',''))
@@ -72,7 +72,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         prepare=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
         self.assertIn('uv sync --frozen',prepare['run']);self.assertNotIn('GITHUB_TOKEN',str(prepare))
         cleanup=next(s for s in steps if s.get('name')=='Stop only the original owned HTTPS auth origin')
-        self.assertEqual(cleanup['if'],"always() && (inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync')")
+        self.assertEqual(cleanup['if'],"always() && (inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read')")
         upload=next(s for s in steps if s.get('uses')=='actions/upload-artifact@v7')['with']['path']
         self.assertNotIn('owned-auth-',upload);self.assertNotIn('driver-build',upload);self.assertNotIn('android-auth-source',upload)
         self.assertIn('origin-proof/',upload)
@@ -83,7 +83,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         self.assertEqual(recovery['if'],"inputs.scene == 'auth-recovery'")
         self.assertNotIn('android_release_auth.py ',recovery['run'])
         origin=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
-        self.assertEqual(origin['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync'")
+        self.assertEqual(origin['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read'")
         self.assertLess(steps.index(recovery),next(i for i,s in enumerate(steps) if s.get('name')=='Stop only the original owned HTTPS auth origin'))
         self.assertTrue(all('unused' not in s.get('name','').lower() for s in steps))
 
@@ -115,9 +115,24 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         self.assertNotIn('android_sync_runtime.py',sync['run'])
         origin=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
         self.assertEqual(origin['env']['RUNTIME_SCENE'],'${{ inputs.scene }}')
-        self.assertIn('if [[ "$RUNTIME_SCENE" == sync ]]',origin['run'])
+        self.assertIn('if [[ "$RUNTIME_SCENE" == sync || "$RUNTIME_SCENE" == sync-read ]]',origin['run'])
         self.assertIn('prepare --fixture sync',origin['run'])
         self.assertIn("inputs.scene == 'sync' && 'sync'",str(steps[-1]['with']['name']))
+
+    def test_sync_read_has_separate_download_script_and_closed_existing_inputs(self):
+        steps=self.flow()['jobs']['release-upgrade']['steps']
+        read=next(s for s in steps if 'android_release_sync_read.py' in s.get('run',''))
+        self.assertEqual(read['if'],"inputs.scene == 'sync-read'")
+        for other in ('android_release_sync.py','android_release_upgrade.py','android_runtime_probe.py'):
+            self.assertNotIn(other,read['run'])
+        origin=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
+        self.assertIn('"$RUNTIME_SCENE" == sync-read',origin['run'])
+        self.assertIn("inputs.scene == 'sync-read' && 'release-sync-read'",self.flow()['jobs']['release-upgrade']['name'])
+        upload=next(s for s in steps if s.get('uses')=='actions/upload-artifact@v7')
+        self.assertIn("inputs.scene == 'sync-read' && 'sync-read'",upload['with']['name'])
+        self.assertEqual(upload['with']['include-hidden-files'],'true')
+        for private in ('driver-build','private-auth','owned-auth-','inputs/'):
+            self.assertNotIn(private,upload['with']['path'])
         self.assertNotIn('device-private',steps[-1]['with']['path'])
 
     def test_auth_preparation_creates_original_hosted_parent_before_service_admission(self):
