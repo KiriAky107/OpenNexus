@@ -49,6 +49,46 @@ public class RuntimeProbe extends Instrumentation {
     private UiAutomation ui;
     private final StringBuilder progress = new StringBuilder();
     private String waitingFor = "initialization";
+    private boolean closedSyncRead;
+    private String syncReadStage = "admission";
+
+    protected final String signedSyncReadStage() { return syncReadStage; }
+
+    /** Read only these fixed peer documents through existing production GUI helpers. */
+    protected final String readSignedSyncPeer(String phase) {
+        require(stableRelease && "cc.kronecker.opennexus".equals(APP) && ReleaseSyncReadScene.allowed(phase),
+            "Closed stable peer read required before UI");
+        closedSyncRead = true;
+        syncReadStage = "initialize";
+        ui = getUiAutomation();
+        AccessibilityServiceInfo info = ui.getServiceInfo();
+        info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        ui.setServiceInfo(info);
+        syncReadStage = "open";
+        open(ReleaseSyncReadScene.path(phase));
+        if ("release-sync-read-markdown".equals(phase)) {
+            syncReadStage = "markdown-body";
+            waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+                && label(node, "Markdown note body", false)
+                && ReleaseSyncReadScene.markdownMatches(string(node.getText())), "fixed peer Markdown display");
+        } else {
+            syncReadStage = "canvas-text";
+            // Observe the exact nodes, without selecting, editing or importing.
+            waitNode(node -> APP.equals(string(node.getPackageName())) && !node.isEditable()
+                && label(node, "text: " + ReleaseSyncReadScene.CANVAS_TEXT, false)
+                && within(node, "Free canvas"), "fixed peer Canvas text");
+            syncReadStage = "canvas-reference";
+            waitNode(node -> APP.equals(string(node.getPackageName())) && !node.isEditable()
+                && label(node, "file: " + ReleaseSyncReadScene.ASSET, false)
+                && within(node, "Free canvas"), "fixed peer Canvas attachment reference");
+        }
+        syncReadStage = "complete";
+        // An accessibility reference is deliberately not PNG decode evidence.
+        return "OPENNEXUS_RELEASE_SYNC_READ_OBSERVED phase=" + phase
+            + " title=1 markdown_body=" + ("release-sync-read-markdown".equals(phase)?1:0)
+            + " canvas_text_and_reference=" + ("release-sync-read-canvas".equals(phase)?1:0)
+            + " no_save=1 no_text_input=1 no_image_import=1 decoded_image_verified=0\n";
+    }
 
     @Override public void onCreate(Bundle args) { super.onCreate(args); arguments = args; start(); }
 
@@ -2363,6 +2403,7 @@ public class RuntimeProbe extends Instrumentation {
             for (AccessibilityNodeInfo node : nodes()) if (node.isVisibleToUser() && predicate.test(node)) return node;
             SystemClock.sleep(200);
         } while (SystemClock.uptimeMillis() < until);
+        if (closedSyncRead) throw new IllegalStateException("Closed peer read target timed out");
         throw new IllegalStateException("UI target timed out\n" + tree());
     }
 

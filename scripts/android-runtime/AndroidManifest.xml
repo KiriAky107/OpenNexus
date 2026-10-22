@@ -28,4 +28,5 @@
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseAuthRecoveryRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.SyncRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseSyncRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
+    <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseSyncReadRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
 </manifest>
