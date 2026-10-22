@@ -40,7 +40,7 @@ def run_hosted_cycle(subject, phase, label):
     require_hosted_emulator(subject.args.serial)
     # Exclusive journal precedes launch and every input. A second invocation
     # cannot replay this original intent, including after an unknown result.
-    exclusive(subject.output / (label + '-host-touch-intent.json'), json.dumps(dict(
+    exclusive(subject.output / (label + '-host-touch-phase-intent.json'), json.dumps(dict(
         phase=phase, input_method='hosted_adb_touchscreen_tap', automatic_retry=False)).encode())
     subject.stop()
     subject.original_command(label + '-launch', ('shell', '-T', shlex.join(('am', 'start', '-W', '-n', subject.activity))))

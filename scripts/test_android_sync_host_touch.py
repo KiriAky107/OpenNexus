@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import android_sync_host_touch as runtime
+from android_release_upgrade import ReleaseUpgrade
 
 
 def ready():
@@ -99,6 +100,37 @@ class HostTouch(unittest.TestCase):
             subject,commands=self.subject(folder)
             with self.assertRaises(RuntimeError):runtime.run_hosted_cycle(subject,'logout','foreign')
             subject.stop.assert_not_called();self.assertFalse(commands)
+
+    def test_real_original_command_recorder_keeps_phase_and_system_input_intents_distinct(self):
+        with tempfile.TemporaryDirectory() as folder:
+            subject,_=self.subject(folder);subject.original_command=ReleaseUpgrade.original_command.__get__(subject)
+            self.execute(subject,Process())
+            actual=[call.args for call in subject.device.call_args_list if call.args[:2]==('shell','-T')
+                    and call.args[2].startswith('input touchscreen')]
+            self.assertEqual(actual,[('shell','-T','input touchscreen tap 300 400')])
+            journal=json.loads((Path(folder)/'first-cycle-host-touch-phase-intent.json').read_bytes())
+            command=json.loads((Path(folder)/'first-cycle-host-touch-intent.json').read_bytes())
+            self.assertEqual(journal['phase'],'cycle');self.assertNotIn('arguments',journal)
+            self.assertEqual(command['arguments'],list(actual[0]));self.assertNotIn('phase',command)
+            before=subject.device.call_count
+            with self.assertRaises(FileExistsError):self.execute(subject,Process())
+            self.assertEqual(subject.device.call_count,before)
+
+    def test_real_recorder_unknown_system_input_preserves_original_and_never_finishes_or_retries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            subject,_=self.subject(folder);subject.original_command=ReleaseUpgrade.original_command.__get__(subject)
+            def device(*args,**kwargs):
+                if args[:2]==('shell','-T') and args[2].startswith('input touchscreen'):
+                    raise runtime.subprocess.TimeoutExpired(args,10,output=b'original-static',stderr=b'')
+                return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+            subject.device.side_effect=device;process=Process()
+            with self.assertRaises(runtime.subprocess.TimeoutExpired):self.execute(subject,process)
+            touch=[call for call in subject.device.call_args_list if call.args[:2]==('shell','-T')
+                   and call.args[2].startswith('input touchscreen')]
+            self.assertEqual(len(touch),1);process.terminate.assert_called_once();self.assertFalse(subject.phases)
+            original=json.loads((Path(folder)/'first-cycle-host-touch-result.json').read_bytes())
+            self.assertTrue(original['unknown_result']);self.assertFalse(original['automatic_retry'])
+            self.assertFalse((Path(folder)/'first-cycle-host-touch-finish-intent.json').exists())
 
 
 if __name__=='__main__':unittest.main()
