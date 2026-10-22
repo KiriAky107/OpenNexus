@@ -225,6 +225,8 @@ class ReleaseSync(ReleaseAuth):
             original_Save_ids=[v[0]['operation_id'] for v in saves], original_association=frozen,
             original_uploaded_operation_ids=[v['operation_id'] for v in uploaded['native']['jobs']], original_peer_receipts=receipts,
             actual_GUI_foreground_upload_and_peer_Native_apply_bytes=True, cold_sync_metadata_and_original_bytes_preserved=True,
+            cycle_input_kind='native_accessibility_click', physical_cycle_touch_verified=False,
+            original_touch_failure_cause_confirmed=False,
             Native_RAM_invocation_id_observed=False, incoming_editor_render_reopen_verified=False,
             private_auth_DB_or_ciphertext_or_UI_or_credentials_exported=False, only_successor_installed=True,
             device_kind='owned-hosted-emulator', physical_phone_verified=False, actual_desktop_product_pair_verified=False,

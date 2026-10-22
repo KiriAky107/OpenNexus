@@ -98,6 +98,7 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected String[] diagnosticCodes() { return new String[0]; }
     protected boolean viewportAdmission() { return false; }
     protected long touchSettleMillis() { return 150; }
+    protected boolean nativeAccessibilityClick(String name) { return false; }
 
     protected final String originalCycleInputMode() { return args.getString("cycle_input","touch"); }
     protected final String originalCycleDispatchId() { return args.getString("cycle_dispatch_id",""); }
@@ -306,7 +307,7 @@ public class AuthRuntimeProbe extends Instrumentation {
         final long settleMillis=touchSettleMillis();
         TargetStability stability=new TargetStability(settleMillis),visibleStability=new TargetStability(settleMillis);
         TouchViewport.RevealBudget reveal=new TouchViewport.RevealBudget();
-        long until=SystemClock.uptimeMillis()+5000;Rect before=new Rect(),hit=new Rect();boolean stable=false;
+        long until=SystemClock.uptimeMillis()+5000;Rect before=new Rect(),hit=new Rect();boolean stable=false;int admittedWindow=-1;
         do {
             AccessibilityNodeInfo node=unique(target);node.getBoundsInScreen(before);
             Rect visible=viewportAdmission() ? visibleTouch(node) : new Rect(before);
@@ -324,7 +325,7 @@ public class AuthRuntimeProbe extends Instrumentation {
             boolean originalStable=stability.observe(before.left,before.top,before.right,before.bottom,observed);
             boolean hitStable=visibleStability.observe(hit.left,hit.top,hit.right,hit.bottom,observed);
             stable=originalStable && hitStable;
-            if (stable) break;
+            if (stable) { admittedWindow=node.getWindowId();break; }
             SystemClock.sleep(80);
         } while (SystemClock.uptimeMillis()<until);
         require(stable,"Named button did not settle before the bounded deadline; no input sent");
@@ -332,6 +333,21 @@ public class AuthRuntimeProbe extends Instrumentation {
             +" required_stable_ms="+settleMillis+" observed_original_stable_ms="+stability.stableForMillis()
             +" observed_visible_stable_ms="+visibleStability.stableForMillis();
         inputTrace=admitted+" down=not_sent up=not_sent";
+        if(nativeAccessibilityClick(name)) {
+            // A different, explicitly recorded GUI input path. Never fall back
+            // to a touch after an accepted, refused, or unknown action result.
+            AccessibilityNodeInfo original=unique(target);Rect fresh=new Rect();original.getBoundsInScreen(fresh);
+            Rect freshVisible=visibleTouch(original);
+            require(APP.equals(text(original.getPackageName())) && original.isEnabled() && original.isClickable()
+                && original.getWindowId()==admittedWindow && fresh.equals(before) && freshVisible!=null && freshVisible.equals(hit),
+                "Original accessible target changed after admission; no action sent");
+            stage="single-native-accessibility-"+name.replace(' ','-');
+            inputTrace=admitted+" native_accessibility=attempted physical_touch=not_sent automatic_retry=false";
+            boolean accepted=original.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            inputTrace=admitted+" native_accessibility="+(accepted?"accepted":"refused")
+                +" physical_touch=not_sent automatic_retry=false";
+            require(accepted,"Original accessibility action refused; no fallback or retry");
+        } else {
         stage="single-touch-down-"+name.replace(' ','-');
         inputTrace=admitted+" down=attempted_without_confirmation up=not_sent";
         long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,hit.centerX(),hit.centerY());
@@ -340,6 +356,7 @@ public class AuthRuntimeProbe extends Instrumentation {
         inputTrace=admitted+" down=accepted up=attempted_without_confirmation";
         SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,hit.centerX(),hit.centerY());
         inputTrace=admitted+" down=accepted up=accepted";
+        }
         stage="wait-idle-after-single-touch-"+name.replace(' ','-');
         try { ui.waitForIdle(150,5000); }
         catch (java.util.concurrent.TimeoutException error) {

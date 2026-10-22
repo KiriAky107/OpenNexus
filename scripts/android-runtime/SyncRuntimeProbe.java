@@ -98,7 +98,9 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
             waitPresent(node->label(node,"Cycle completed"));
         } finally {
             originalAutomation.setOnAccessibilityEventListener(null);
-            Bundle facts=new Bundle();facts.putString("stream","OPENNEXUS_SYNC_ORIGINAL_CYCLE_INPUT "+observation.closeAndSummary()+"\n");
+            String inputKind=nativeAccessibilityClick("Sync one cycle now")?"native_accessibility_click":"physical_touch";
+            Bundle facts=new Bundle();facts.putString("stream","OPENNEXUS_SYNC_ORIGINAL_CYCLE_INPUT "+observation.closeAndSummary()
+                +" input_method="+inputKind+" physical_touch="+inputKind.equals("physical_touch")+"\n");
             sendStatus(1,facts);
         }
     }
