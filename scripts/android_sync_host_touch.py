@@ -13,8 +13,17 @@ from release_plan import atomic_json
 UUID = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
 
 
+def admitted_phase(entry, phase):
+    return (entry == 'ReleaseSyncRuntimeProbe' and phase in ('cycle', 'cycle-incoming')
+            or entry == 'ReleaseSyncMutationRuntimeProbe' and phase in ('cycle-rename', 'cycle-delete'))
+
+
 def validate_ready(value, phase, elapsed_ms):
-    require(phase in ('cycle', 'cycle-incoming') and isinstance(value, dict)
+    return _validate_ready(value, phase, elapsed_ms, 'ReleaseSyncRuntimeProbe')
+
+
+def _validate_ready(value, phase, elapsed_ms, entry):
+    require(admitted_phase(entry, phase) and isinstance(value, dict)
             and set(value) == {'driver_intent_id', 'phase', 'package', 'window', 'original', 'visible', 'x', 'y', 'elapsed_ms'},
             'SYNC_HOST_TOUCH_READY_SCOPE')
     require(value['phase'] == phase and value['package'] == APP
@@ -36,7 +45,16 @@ def validate_ready(value, phase, elapsed_ms):
 
 
 def run_hosted_cycle(subject, phase, label):
-    require(phase in ('cycle', 'cycle-incoming') and re.fullmatch('[a-z][a-z0-9-]{0,47}', label), 'SYNC_HOST_TOUCH_PHASE')
+    return _run_hosted_cycle(subject, phase, label, 'ReleaseSyncRuntimeProbe')
+
+
+def run_hosted_mutation_cycle(subject, phase, label):
+    return _run_hosted_cycle(subject, phase, label, 'ReleaseSyncMutationRuntimeProbe')
+
+
+def _run_hosted_cycle(subject, phase, label, entry):
+    require(subject.driver_entry == entry and admitted_phase(entry, phase)
+            and re.fullmatch('[a-z][a-z0-9-]{0,47}', label), 'SYNC_HOST_TOUCH_PHASE')
     require_hosted_emulator(subject.args.serial)
     # Exclusive journal precedes launch and every input. A second invocation
     # cannot replay this original intent, including after an unknown result.
@@ -65,7 +83,7 @@ def run_hosted_cycle(subject, phase, label):
             require(time.monotonic() < deadline, 'SYNC_HOST_TOUCH_READY_TIMEOUT'); time.sleep(.1)
         clock = subject.shell('cat', '/proc/uptime').stdout.decode('ascii').split()[0]
         require(re.fullmatch(r'[0-9]+\.[0-9]{1,3}', clock), 'SYNC_HOST_TOUCH_UPTIME_SHAPE')
-        value = validate_ready(value, phase, int(float(clock) * 1000))
+        value = _validate_ready(value, phase, int(float(clock) * 1000), entry)
         atomic_json(subject.output / (label + '-host-touch-ready.json'), value)
         require(process.poll() is None and subject.shell('pidof', APP).stdout.strip() == pid
                 and ReleaseAuthBackground.app_is_resumed(subject) and subject.observer.observe_identity() == subject.identity,
@@ -73,7 +91,7 @@ def run_hosted_cycle(subject, phase, label):
         final_clock = subject.shell('cat', '/proc/uptime').stdout.decode('ascii').split()[0]
         require(re.fullmatch(r'[0-9]+\.[0-9]{1,3}', final_clock), 'SYNC_HOST_TOUCH_FINAL_UPTIME_SHAPE')
         elapsed_ms = int(float(final_clock) * 1000)
-        validate_ready(value, phase, elapsed_ms)
+        _validate_ready(value, phase, elapsed_ms, entry)
         atomic_json(subject.output / (label + '-host-touch-owner.json'), dict(pid=int(pid), same_original_PID=True,
             original_instrumentation_alive=True, app_resumed=True, ready_age_bound_ms=2000,
             observed_ready_age_ms=elapsed_ms-value['elapsed_ms'], input_method='hosted_adb_touchscreen_tap'))

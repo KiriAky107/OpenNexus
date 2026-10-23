@@ -14,6 +14,7 @@ from android_runtime_probe import IMAGE_BYTES, require
 
 LOCAL = ('release-owned-note.md', 'release-owned-original.canvas')
 PEER = ('release-owned-peer-note.md', 'release-owned-peer-original.canvas')
+RENAMED = 'release-owned-peer-renamed.md'
 IMAGE_HASH = hashlib.sha256(IMAGE_BYTES).hexdigest()
 ASSET = f'attachments/{IMAGE_HASH[:2]}/{IMAGE_HASH}.png'
 TABLES = {
@@ -46,8 +47,11 @@ def project_sync(snapshot, working, *, incoming=False):
     return _project_owned(snapshot, working, paths)
 
 
-def _project_owned(snapshot, working, paths):
+def _project_owned(snapshot, working, paths, *, deleted_peer_note=False):
     """Common raw-copy/closed-column reader, without seed or Save assumptions."""
+    require(type(deleted_peer_note) is bool and (not deleted_peer_note or paths == (PEER[1], ASSET)),
+            'RELEASE_SYNC_EXACT_DELETED_PEER_STAGE')
+    record_paths = paths + (RENAMED,) if deleted_peer_note else paths
     snapshot, working = Path(snapshot).resolve(), Path(working).resolve()
     admit_attachment(ASSET)
     expected = {'vault/' + path for path in paths} | {db + suffix for db in DATABASES for suffix in ('', '-wal', '-shm')}
@@ -84,12 +88,13 @@ def _project_owned(snapshot, working, paths):
         require(db.execute('PRAGMA integrity_check').fetchone() == ('ok',), 'RELEASE_SYNC_HOST_INTEGRITY')
         columns = 'id,path,hash,revision,deleted'
         files = [dict(zip(columns.split(','), row)) for row in rows(db, 'SELECT ' + columns + ' FROM files ORDER BY path')]
-        require(len(files) == len(paths) and {v['path'] for v in files} == set(paths)
-                and all(v['deleted'] == 0 and v['hash'] == hashes['vault/' + v['path']] for v in files),
+        require(len(files) == len(record_paths) and {v['path'] for v in files} == set(record_paths)
+                and all(v['deleted'] == 1 if deleted_peer_note and v['path'] == RENAMED
+                        else v['deleted'] == 0 and v['hash'] == hashes['vault/' + v['path']] for v in files),
                 'RELEASE_SYNC_EXACT_OWNED_FILE_SET')
         columns = 'operation_id,file_id,revision,path,hash,operation,state'
         outbox = [dict(zip(columns.split(','), row)) for row in rows(db, 'SELECT ' + columns + ' FROM outbox ORDER BY rowid')]
-        require(all(v['path'] in paths for v in outbox), 'RELEASE_SYNC_FOREIGN_OUTBOX')
+        require(all(v['path'] in record_paths for v in outbox), 'RELEASE_SYNC_FOREIGN_OUTBOX')
         columns = 'id,remote_vault,state,cursor,endpoint,account'
         bindings = [dict(zip(columns.split(','), row)) for row in rows(db, 'SELECT ' + columns + ' FROM sync_bindings')]
         require(len(bindings) <= 1, 'RELEASE_SYNC_BINDING_AMBIGUOUS')
@@ -119,7 +124,7 @@ def _project_owned(snapshot, working, paths):
                 preview_fingerprint=request['preview_fingerprint'], remote_vault=request['remote_vault'], auth_operation_id=request['selection']['operation_id'],
                 original_request_bytes_sha256=hashlib.sha256(original[2].encode()).hexdigest(),
                 original_binding_bytes_sha256=hashlib.sha256(original[5].encode()).hexdigest())
-        require(all(v.get('path', v.get('local_path')) in paths for table in ('jobs', 'heads', 'conflicts') for v in native[table]),
+        require(all(v.get('path', v.get('local_path')) in record_paths for table in ('jobs', 'heads', 'conflicts') for v in native[table]),
                 'RELEASE_SYNC_FOREIGN_TRANSFER_PATH')
     for relative, value in hashes.items(): require(sha(snapshot / relative) == value, 'RELEASE_SYNC_RETAINED_ORIGINAL_CHANGED')
     return dict(native=native, files=files, drafts=drafts, saves=saves, raw_sha256=hashes,
