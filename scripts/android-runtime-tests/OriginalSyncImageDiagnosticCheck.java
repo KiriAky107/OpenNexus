@@ -25,6 +25,29 @@ public final class OriginalSyncImageDiagnosticCheck {
             OriginalSyncImageDiagnostic one=new OriginalSyncImageDiagnostic();String line=one.observe(reason,0,0);
             need(line.length()<160 && line.matches("OPENNEXUS_IMAGE_GEOMETRY_GUARD guard=[A-Z_]+ titles_capped64=0 images_capped64=0"));
         }cases++;
-        System.out.println("OWNED_IMAGE_DIAGNOSTIC_OK cases="+cases+" reasons="+OriginalSyncImageDiagnostic.Guard.values().length+" raw_UI_or_capture_exported=0");
+        OriginalSyncImageDiagnostic o=new OriginalSyncImageDiagnostic();
+        need(o.overlapSummary().contains("last_kind=UNOBSERVED")&&o.overlapSummary().contains("children_capped64=-1"));cases++;
+        need(o.overlap(OriginalSyncImageDiagnostic.Overlap.IMAGE_REFERENCE,true,false,0).equals(
+            "OPENNEXUS_IMAGE_OVERLAP_GUARD kind=IMAGE_REFERENCE clickable=1 editable=0 children_capped64=0"));cases++;
+        need(o.overlap(OriginalSyncImageDiagnostic.Overlap.IMAGE_REFERENCE,true,false,0)==null);cases++;
+        need(o.overlap(OriginalSyncImageDiagnostic.Overlap.OTHER_CONTAINER,false,false,Integer.MAX_VALUE).endsWith("children_capped64=64"));cases++;
+        for(int i=0;i<5000;i++) {
+            o.overlap(i%2==0?OriginalSyncImageDiagnostic.Overlap.OTHER_IMAGE:OriginalSyncImageDiagnostic.Overlap.OTHER_TEXT,false,false,i);
+            o.observe(i%2==0?OriginalSyncImageDiagnostic.Guard.CONTENT_OVERLAP:OriginalSyncImageDiagnostic.Guard.WINDOW,1,1);
+        }
+        need(o.overlapSummary().contains("samples_capped4096=4096")&&o.overlapSummary().contains("shared_transitions_emitted=32"));cases++;
+        need(o.overlap(OriginalSyncImageDiagnostic.Overlap.IMAGE_DESCENDANT,false,true,0)==null);
+        need(o.overlapSummary().contains("last_kind=IMAGE_DESCENDANT")&&o.overlapSummary().contains("editable=1"));cases++;
+        for(int mode=0;mode<3;mode++) {
+            boolean refused=false;try{o.overlap(mode==0?null:mode==1?OriginalSyncImageDiagnostic.Overlap.UNOBSERVED:OriginalSyncImageDiagnostic.Overlap.OTHER_OWNED,false,false,mode==2?-1:0);}
+            catch(IllegalStateException safe){refused=true;need(!safe.toString().contains("SECRET_CONTEXT_UI_NEVER_EXPORT"));}
+            need(refused);cases++;
+        }
+        for(OriginalSyncImageDiagnostic.Overlap kind:OriginalSyncImageDiagnostic.Overlap.values())if(kind!=OriginalSyncImageDiagnostic.Overlap.UNOBSERVED) {
+            OriginalSyncImageDiagnostic one=new OriginalSyncImageDiagnostic();String line=one.overlap(kind,false,false,0);
+            need(line.length()<160 && line.matches("OPENNEXUS_IMAGE_OVERLAP_GUARD kind=[A-Z_]+ clickable=0 editable=0 children_capped64=0"));
+        }cases++;
+        System.out.println("OWNED_IMAGE_DIAGNOSTIC_OK cases="+cases+" reasons="+OriginalSyncImageDiagnostic.Guard.values().length
+            +" overlap_kinds="+OriginalSyncImageDiagnostic.Overlap.values().length+" raw_UI_or_capture_exported=0");
     }
 }

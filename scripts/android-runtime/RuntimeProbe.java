@@ -89,7 +89,10 @@ public class RuntimeProbe extends Instrumentation {
         syncReadStage="image-held";
         gate.hold(()->ownedImageFrame(uid),SystemClock::elapsedRealtime,SystemClock::sleep,()->OriginalAuthSignal.complete(finish));
         syncReadStage="image-complete";
-        } finally { emitImageDiagnostic(imageDiagnostic.summary()); }
+        } finally {
+            emitImageDiagnostic(imageDiagnostic.summary());
+            emitImageDiagnostic(imageDiagnostic.overlapSummary());
+        }
     }
     private void emitImageDiagnostic(String line) {
         if(line==null)return;
@@ -142,7 +145,10 @@ public class RuntimeProbe extends Instrumentation {
                 // container is transparent; any edge/control/text remains a blocker.
                 boolean emptyConnections=APP.equals(string(node.getPackageName())) && "android.widget.Image".equals(string(node.getClassName()))
                     && label(node,"Node connections",false) && within(node,"Free canvas");
-                if(OriginalSyncImageGate.occluded(node.isVisibleToUser(),Rect.intersects(imageRect,bounds),ancestor,emptyConnections))return imageUnknown(OriginalSyncImageDiagnostic.Guard.CONTENT_OVERLAP,titles,images);
+                if(OriginalSyncImageGate.occluded(node.isVisibleToUser(),Rect.intersects(imageRect,bounds),ancestor,emptyConnections)) {
+                    emitImageDiagnostic(imageDiagnostic.overlap(imageOverlapKind(node,image),node.isClickable(),node.isEditable(),node.getChildCount()));
+                    return imageUnknown(OriginalSyncImageDiagnostic.Guard.CONTENT_OVERLAP,titles,images);
+                }
             }
             for(AccessibilityWindowInfo other:windows)if(other.getId()!=windowId && other.getDisplayId()==0 && other.getLayer()>=own.getLayer()) {
                 Rect bounds=new Rect();other.getBoundsInScreen(bounds);if(Rect.intersects(imageRect,bounds))return imageUnknown(OriginalSyncImageDiagnostic.Guard.WINDOW_OVERLAP,titles,images);
@@ -157,6 +163,27 @@ public class RuntimeProbe extends Instrumentation {
             }catch(IllegalStateException invalid){return imageUnknown(OriginalSyncImageDiagnostic.Guard.REGION,titles,images);}
             emitImageDiagnostic(imageDiagnostic.observe(OriginalSyncImageDiagnostic.Guard.FRAME_CANDIDATE,titles,images));return frame;
         }catch(Exception unavailable) { return imageUnknown(OriginalSyncImageDiagnostic.Guard.UNAVAILABLE,-1,-1); } // No raw exception or input fallback.
+    }
+
+    /** Classify only the first already-rejected overlap; never exempts a node. */
+    private OriginalSyncImageDiagnostic.Overlap imageOverlapKind(AccessibilityNodeInfo node,AccessibilityNodeInfo image) {
+        if(!APP.equals(string(node.getPackageName())))return OriginalSyncImageDiagnostic.Overlap.OTHER_PACKAGE;
+        AccessibilityNodeInfo parent=node.getParent();
+        for(int depth=0;parent!=null && depth<64;depth++,parent=parent.getParent())
+            if(parent.equals(image))return OriginalSyncImageDiagnostic.Overlap.IMAGE_DESCENDANT;
+        if(label(node,"file: "+ReleaseSyncReadScene.ASSET,false))return OriginalSyncImageDiagnostic.Overlap.IMAGE_REFERENCE;
+        if(label(node,"text: "+ReleaseSyncReadScene.CANVAS_TEXT,false))return OriginalSyncImageDiagnostic.Overlap.PEER_TEXT;
+        if(label(node,"Node connections",false))return OriginalSyncImageDiagnostic.Overlap.CONNECTIONS;
+        if(label(node,"Free canvas",false))return OriginalSyncImageDiagnostic.Overlap.CANVAS_LABEL;
+        if(label(node,ReleaseSyncReadScene.path("release-sync-read-canvas"),false))return OriginalSyncImageDiagnostic.Overlap.CANVAS_TITLE;
+        String role=string(node.getClassName());
+        if("android.widget.Image".equals(role))return OriginalSyncImageDiagnostic.Overlap.OTHER_IMAGE;
+        if("android.widget.TextView".equals(role))return OriginalSyncImageDiagnostic.Overlap.OTHER_TEXT;
+        if("android.widget.Button".equals(role))return OriginalSyncImageDiagnostic.Overlap.OTHER_BUTTON;
+        if("android.widget.EditText".equals(role))return OriginalSyncImageDiagnostic.Overlap.OTHER_EDITABLE;
+        if("android.view.View".equals(role) || "android.view.ViewGroup".equals(role) || "android.webkit.WebView".equals(role))
+            return OriginalSyncImageDiagnostic.Overlap.OTHER_CONTAINER;
+        return OriginalSyncImageDiagnostic.Overlap.OTHER_OWNED;
     }
 
     /** Read only these fixed peer documents through existing production GUI helpers. */

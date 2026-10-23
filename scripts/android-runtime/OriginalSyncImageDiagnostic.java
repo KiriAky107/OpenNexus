@@ -4,8 +4,28 @@ package cc.kronecker.opennexus.testdriver;
 final class OriginalSyncImageDiagnostic {
     enum Guard { UNSAMPLED, ACTIVE_ROOT, KEYBOARD, WINDOW, PASSWORD, TITLE_IMAGE, CANVAS,
         IMAGE_IN_WINDOW, FILE_PANEL, CONTENT_OVERLAP, WINDOW_OVERLAP, DISPLAY, REGION, FRAME_CANDIDATE, UNAVAILABLE }
+    enum Overlap { UNOBSERVED, IMAGE_DESCENDANT, IMAGE_REFERENCE, PEER_TEXT, CONNECTIONS, CANVAS_LABEL,
+        CANVAS_TITLE, OTHER_IMAGE, OTHER_TEXT, OTHER_BUTTON, OTHER_EDITABLE, OTHER_CONTAINER, OTHER_OWNED, OTHER_PACKAGE }
     private Guard last=Guard.UNSAMPLED;
     private int titles=-1,images=-1,samples,emitted;
+    private Overlap overlap=Overlap.UNOBSERVED;
+    private int children=-1,overlapSamples;
+    private boolean clickable,editable;
+    String overlap(Overlap kind,boolean isClickable,boolean isEditable,int childCount) {
+        if(kind==null || kind==Overlap.UNOBSERVED || childCount<0)throw new IllegalStateException("OWNED_IMAGE_DIAGNOSTIC_REFUSED");
+        overlapSamples=Math.min(4096,overlapSamples+1);
+        int bounded=Math.min(64,childCount);
+        boolean changed=kind!=overlap || isClickable!=clickable || isEditable!=editable || bounded!=children;
+        overlap=kind;clickable=isClickable;editable=isEditable;children=bounded;
+        if(!changed || emitted>=32)return null;
+        emitted++;return "OPENNEXUS_IMAGE_OVERLAP_GUARD kind="+overlap.name()+" clickable="+(clickable?1:0)
+            +" editable="+(editable?1:0)+" children_capped64="+children;
+    }
+    String overlapSummary() {
+        return "OPENNEXUS_IMAGE_OVERLAP_SUMMARY last_kind="+overlap.name()+" clickable="+(clickable?1:0)
+            +" editable="+(editable?1:0)+" children_capped64="+children+" samples_capped4096="+overlapSamples
+            +" shared_transitions_emitted="+emitted+" raw_UI_exported=0 overlap_rejection_unchanged=1";
+    }
     String observe(Guard guard,int titleCount,int imageCount) {
         if(guard==null || titleCount < -1 || imageCount < -1)throw new IllegalStateException("OWNED_IMAGE_DIAGNOSTIC_REFUSED");
         samples=Math.min(4096,samples+1);

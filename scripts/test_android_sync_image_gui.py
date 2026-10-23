@@ -57,6 +57,11 @@ class SyncImageGUIChecks(unittest.TestCase):
         self.assertIn('file.createNewFile()',method)
         scan=method[method.index('private OriginalSyncImageGate.Frame ownedImageFrame'):]
         self.assertLess(scan.index('node.isPassword())return imageUnknown'),scan.index('label(node,ReleaseSyncReadScene.path'))
+        self.assertIn('OriginalSyncImageGate.occluded(node.isVisibleToUser(),Rect.intersects(imageRect,bounds),ancestor,emptyConnections)',scan)
+        blocked=scan[scan.index('if(OriginalSyncImageGate.occluded('):scan.index('for(AccessibilityWindowInfo other:')]
+        self.assertIn('return imageUnknown(OriginalSyncImageDiagnostic.Guard.CONTENT_OVERLAP',blocked)
+        self.assertNotIn('continue',blocked)
+        self.assertIn('imageDiagnostic.overlapSummary()',method)
 
 
 if __name__=='__main__':unittest.main()
