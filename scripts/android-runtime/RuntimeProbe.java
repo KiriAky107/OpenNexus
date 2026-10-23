@@ -51,6 +51,7 @@ public class RuntimeProbe extends Instrumentation {
     private String waitingFor = "initialization";
     private boolean closedSyncRead;
     private String syncReadStage = "admission";
+    private OriginalSyncImageDiagnostic imageDiagnostic;
 
     protected final String signedSyncReadStage() { return syncReadStage; }
 
@@ -65,6 +66,8 @@ public class RuntimeProbe extends Instrumentation {
         // Reuse file-drawer/title/Canvas helpers without widening either old entry.
         readSignedSyncPeer("release-sync-read-canvas");
         syncReadStage="image-geometry";
+        imageDiagnostic=new OriginalSyncImageDiagnostic();
+        try {
         int uid=getContext().getPackageManager().getApplicationInfo(APP,0).uid;
         OriginalSyncImageGate gate=new OriginalSyncImageGate();
         long until=SystemClock.elapsedRealtime()+25000,readyAt=0;OriginalSyncImageGate.Frame frame=null;
@@ -86,6 +89,14 @@ public class RuntimeProbe extends Instrumentation {
         syncReadStage="image-held";
         gate.hold(()->ownedImageFrame(uid),SystemClock::elapsedRealtime,SystemClock::sleep,()->OriginalAuthSignal.complete(finish));
         syncReadStage="image-complete";
+        } finally { emitImageDiagnostic(imageDiagnostic.summary()); }
+    }
+    private void emitImageDiagnostic(String line) {
+        if(line==null)return;
+        Bundle value=new Bundle();value.putString("stream",line+"\n");sendStatus(0,value);
+    }
+    private OriginalSyncImageGate.Frame imageUnknown(OriginalSyncImageDiagnostic.Guard guard,int titles,int images) {
+        emitImageDiagnostic(imageDiagnostic.observe(guard,titles,images));return null;
     }
     private void writeImagePrivate(File file,JSONObject value) throws Exception {
         require(!java.nio.file.Files.isSymbolicLink(file.toPath()) && file.createNewFile(),"Original image intent not replayable");
@@ -96,17 +107,17 @@ public class RuntimeProbe extends Instrumentation {
     private OriginalSyncImageGate.Frame ownedImageFrame(int uid) {
         try {
             AccessibilityNodeInfo root=ui.getRootInActiveWindow();
-            if(root==null || !APP.equals(string(root.getPackageName())))return null;
+            if(root==null || !APP.equals(string(root.getPackageName())))return imageUnknown(OriginalSyncImageDiagnostic.Guard.ACTIVE_ROOT,-1,-1);
             int windowId=root.getWindowId();List<AccessibilityWindowInfo> windows=ui.getWindows();
             AccessibilityWindowInfo own=null;int ownCount=0;
             for(AccessibilityWindowInfo window:windows) {
-                if(window.getType()==AccessibilityWindowInfo.TYPE_INPUT_METHOD)return null;
+                if(window.getType()==AccessibilityWindowInfo.TYPE_INPUT_METHOD)return imageUnknown(OriginalSyncImageDiagnostic.Guard.KEYBOARD,-1,-1);
                 if(window.getId()==windowId) {own=window;ownCount++;}
             }
             if(ownCount!=1 || own==null || own.getType()!=AccessibilityWindowInfo.TYPE_APPLICATION
-                || !own.isActive() || !own.isFocused() || own.getDisplayId()!=0)return null;
+                || !own.isActive() || !own.isFocused() || own.getDisplayId()!=0)return imageUnknown(OriginalSyncImageDiagnostic.Guard.WINDOW,-1,-1);
             List<AccessibilityNodeInfo> observed=nodes();AccessibilityNodeInfo image=null;int images=0,titles=0;
-            for(AccessibilityNodeInfo node:observed)if(node.isVisibleToUser() && node.isPassword())return null;
+            for(AccessibilityNodeInfo node:observed)if(node.isVisibleToUser() && node.isPassword())return imageUnknown(OriginalSyncImageDiagnostic.Guard.PASSWORD,-1,-1);
             for(AccessibilityNodeInfo node:observed)if(APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
                 && node.getWindowId()==windowId) {
                 if(!node.isClickable() && label(node,ReleaseSyncReadScene.path("release-sync-read-canvas"),false) && titleBarControl(node))titles++;
@@ -114,16 +125,16 @@ public class RuntimeProbe extends Instrumentation {
                     label(node,ReleaseSyncReadScene.ASSET,false),node.getWindowId(),windowId,node.isVisibleToUser(),
                     node.isEditable(),node.isPassword(),within(node,"Free canvas"))) {images++;image=node;}
             }
-            if(titles!=1 || images!=1)return null;
+            if(titles!=1 || images!=1)return imageUnknown(OriginalSyncImageDiagnostic.Guard.TITLE_IMAGE,titles,images);
             AccessibilityNodeInfo canvas=image;
             for(int depth=0;canvas!=null && depth<32 && !label(canvas,"Free canvas",false);depth++)canvas=canvas.getParent();
-            if(canvas==null || !APP.equals(string(canvas.getPackageName())) || !canvas.isVisibleToUser())return null;
+            if(canvas==null || !APP.equals(string(canvas.getPackageName())) || !canvas.isVisibleToUser())return imageUnknown(OriginalSyncImageDiagnostic.Guard.CANVAS,titles,images);
             Rect imageRect=new Rect(),canvasRect=new Rect(),windowRect=new Rect();
             image.getBoundsInScreen(imageRect);canvas.getBoundsInScreen(canvasRect);own.getBoundsInScreen(windowRect);
-            if(imageRect.isEmpty() || !windowRect.contains(imageRect))return null;
-            if(visibleFilePanel())return null;
+            if(imageRect.isEmpty() || !windowRect.contains(imageRect))return imageUnknown(OriginalSyncImageDiagnostic.Guard.IMAGE_IN_WINDOW,titles,images);
+            if(visibleFilePanel())return imageUnknown(OriginalSyncImageDiagnostic.Guard.FILE_PANEL,titles,images);
             for(AccessibilityNodeInfo node:observed)if(node.isVisibleToUser() && node.getWindowId()==windowId) {
-                if(node.isPassword())return null;
+                if(node.isPassword())return imageUnknown(OriginalSyncImageDiagnostic.Guard.PASSWORD,-1,-1);
                 boolean ancestor=false;AccessibilityNodeInfo parent=image;
                 for(int depth=0;parent!=null && depth<64;depth++,parent=parent.getParent())if(node.equals(parent)){ancestor=true;break;}
                 Rect bounds=new Rect();node.getBoundsInScreen(bounds);
@@ -131,18 +142,21 @@ public class RuntimeProbe extends Instrumentation {
                 // container is transparent; any edge/control/text remains a blocker.
                 boolean emptyConnections=APP.equals(string(node.getPackageName())) && "android.widget.Image".equals(string(node.getClassName()))
                     && label(node,"Node connections",false) && within(node,"Free canvas");
-                if(OriginalSyncImageGate.occluded(node.isVisibleToUser(),Rect.intersects(imageRect,bounds),ancestor,emptyConnections))return null;
+                if(OriginalSyncImageGate.occluded(node.isVisibleToUser(),Rect.intersects(imageRect,bounds),ancestor,emptyConnections))return imageUnknown(OriginalSyncImageDiagnostic.Guard.CONTENT_OVERLAP,titles,images);
             }
             for(AccessibilityWindowInfo other:windows)if(other.getId()!=windowId && other.getDisplayId()==0 && other.getLayer()>=own.getLayer()) {
-                Rect bounds=new Rect();other.getBoundsInScreen(bounds);if(Rect.intersects(imageRect,bounds))return null;
+                Rect bounds=new Rect();other.getBoundsInScreen(bounds);if(Rect.intersects(imageRect,bounds))return imageUnknown(OriginalSyncImageDiagnostic.Guard.WINDOW_OVERLAP,titles,images);
             }
             android.view.WindowManager manager=(android.view.WindowManager)getContext().getSystemService(android.content.Context.WINDOW_SERVICE);
-            android.view.Display display=manager.getDefaultDisplay();if(display==null || display.getDisplayId()!=0)return null;
+            android.view.Display display=manager.getDefaultDisplay();if(display==null || display.getDisplayId()!=0)return imageUnknown(OriginalSyncImageDiagnostic.Guard.DISPLAY,titles,images);
             android.graphics.Point size=new android.graphics.Point();display.getRealSize(size);
-            return new OriginalSyncImageGate.Frame(uid,windowId,0,new int[]{0,0,size.x,size.y},
+            OriginalSyncImageGate.Frame frame;
+            try { frame=new OriginalSyncImageGate.Frame(uid,windowId,0,new int[]{0,0,size.x,size.y},
                 new int[]{canvasRect.left,canvasRect.top,canvasRect.right,canvasRect.bottom},
                 new int[]{imageRect.left,imageRect.top,imageRect.right,imageRect.bottom});
-        }catch(Exception unavailable) { return null; } // No UI/raw exception export or input fallback.
+            }catch(IllegalStateException invalid){return imageUnknown(OriginalSyncImageDiagnostic.Guard.REGION,titles,images);}
+            emitImageDiagnostic(imageDiagnostic.observe(OriginalSyncImageDiagnostic.Guard.FRAME_CANDIDATE,titles,images));return frame;
+        }catch(Exception unavailable) { return imageUnknown(OriginalSyncImageDiagnostic.Guard.UNAVAILABLE,-1,-1); } // No raw exception or input fallback.
     }
 
     /** Read only these fixed peer documents through existing production GUI helpers. */

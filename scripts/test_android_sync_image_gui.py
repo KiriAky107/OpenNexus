@@ -33,7 +33,7 @@ class SyncImageGUIChecks(unittest.TestCase):
             for name,value in STUBS.items():
                 if name=='android/app/Instrumentation.java':value=value.replace('No credential input in local admission check','SECRET_CONTEXT_UI_NEVER_EXPORT')
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value,'utf-8');paths.append(str(path))
-            checks=('ReleaseSyncImageEntryCheck','OriginalSyncImageGateCheck','OriginalSyncImageRegionCheck')
+            checks=('ReleaseSyncImageEntryCheck','OriginalSyncImageGateCheck','OriginalSyncImageRegionCheck','OriginalSyncImageDiagnosticCheck')
             run([str(javac),'-J-Xmx128m','-encoding','UTF-8','-classpath',str(actual)+os.pathsep+str(sdk),'-d',str(harness),
                 *paths,*(str(ROOT/('android-runtime-tests/'+name+'.java')) for name in checks)])
             for name in checks:
@@ -56,7 +56,7 @@ class SyncImageGUIChecks(unittest.TestCase):
         self.assertIn('gate.hold(',method);self.assertIn('OriginalAuthSignal.complete(finish)',method)
         self.assertIn('file.createNewFile()',method)
         scan=method[method.index('private OriginalSyncImageGate.Frame ownedImageFrame'):]
-        self.assertLess(scan.index('node.isPassword())return null'),scan.index('label(node,ReleaseSyncReadScene.path'))
+        self.assertLess(scan.index('node.isPassword())return imageUnknown'),scan.index('label(node,ReleaseSyncReadScene.path'))
 
 
 if __name__=='__main__':unittest.main()
