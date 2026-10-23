@@ -107,8 +107,11 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
         }
     }
     private String originalCyclePhase,originalCycleIntent;
+    protected boolean hostedCyclePhaseAllowed(String phase) {
+        return "cycle".equals(phase) || "cycle-incoming".equals(phase);
+    }
     @Override protected void awaitHostedCycleTouch(android.graphics.Rect original,android.graphics.Rect hit,int window) {
-        require(APP.equals("cc.kronecker.opennexus") && ("cycle".equals(originalCyclePhase)||"cycle-incoming".equals(originalCyclePhase))
+        require(APP.equals("cc.kronecker.opennexus") && hostedCyclePhaseAllowed(originalCyclePhase)
             && canonical(originalCycleIntent),"Unscoped hosted cycle input");
         try {
             org.json.JSONArray full=new org.json.JSONArray(),visible=new org.json.JSONArray();
