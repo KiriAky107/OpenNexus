@@ -54,6 +54,97 @@ public class RuntimeProbe extends Instrumentation {
 
     protected final String signedSyncReadStage() { return syncReadStage; }
 
+    /** Fixed GUI only. The host owns the actual compositor command and PID binding. */
+    protected final void holdSignedSyncImage() throws Exception {
+        require(stableRelease && "cc.kronecker.opennexus".equals(APP), "Closed stable image identity required");
+        closedSyncRead=true;syncReadStage="image-intent";
+        File directory=getContext().getNoBackupFilesDir();
+        String nonce=java.util.UUID.randomUUID().toString();
+        writeImagePrivate(new File(directory,"owned-sync-image-intent.json"),new JSONObject()
+            .put("phase",OriginalSyncImageRegion.PHASE).put("nonce",nonce).put("read_only",true).put("capture_by_driver",false));
+        // Reuse file-drawer/title/Canvas helpers without widening either old entry.
+        readSignedSyncPeer("release-sync-read-canvas");
+        syncReadStage="image-geometry";
+        int uid=getContext().getPackageManager().getApplicationInfo(APP,0).uid;
+        OriginalSyncImageGate gate=new OriginalSyncImageGate();
+        long until=SystemClock.elapsedRealtime()+25000,readyAt=0;OriginalSyncImageGate.Frame frame=null;
+        do {
+            OriginalSyncImageGate.Frame observed=ownedImageFrame(uid);long now=SystemClock.elapsedRealtime();
+            if(gate.observe(observed,now)) {frame=gate.publish(now);readyAt=now;break;}
+            SystemClock.sleep(50);
+        }while(SystemClock.elapsedRealtime()<until);
+        require(frame!=null,"Owned image geometry not observed; no capture requested");
+        File finish=new File(directory,"owned-sync-image-"+nonce+".finish");
+        require(!finish.exists() && !java.nio.file.Files.isSymbolicLink(finish.toPath()),"Original image finish already exists");
+        JSONObject ready=new JSONObject().put("nonce",nonce).put("phase",OriginalSyncImageRegion.PHASE).put("package",APP)
+            .put("uid",frame.uid).put("window",frame.window).put("display",frame.display)
+            .put("screen",new JSONArray(frame.screen())).put("canvas",new JSONArray(frame.canvas())).put("image",new JSONArray(frame.image()))
+            .put("elapsed_ms",readyAt).put("stable_ms",gate.stableMillis()).put("title_verified",true)
+            .put("exact_image_alt",ReleaseSyncReadScene.ASSET).put("visible_unobscured",true).put("no_keyboard",true);
+        syncReadStage="image-ready";writeImagePrivate(new File(directory,"owned-sync-image-ready.json"),ready);
+        Bundle signal=new Bundle();signal.putString("owned_image_ready",nonce);sendStatus(0,signal);
+        syncReadStage="image-held";
+        gate.hold(()->ownedImageFrame(uid),SystemClock::elapsedRealtime,SystemClock::sleep,()->OriginalAuthSignal.complete(finish));
+        syncReadStage="image-complete";
+    }
+    private void writeImagePrivate(File file,JSONObject value) throws Exception {
+        require(!java.nio.file.Files.isSymbolicLink(file.toPath()) && file.createNewFile(),"Original image intent not replayable");
+        try(FileOutputStream output=new FileOutputStream(file)) {
+            output.write(value.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));output.getFD().sync();
+        }
+    }
+    private OriginalSyncImageGate.Frame ownedImageFrame(int uid) {
+        try {
+            AccessibilityNodeInfo root=ui.getRootInActiveWindow();
+            if(root==null || !APP.equals(string(root.getPackageName())))return null;
+            int windowId=root.getWindowId();List<AccessibilityWindowInfo> windows=ui.getWindows();
+            AccessibilityWindowInfo own=null;int ownCount=0;
+            for(AccessibilityWindowInfo window:windows) {
+                if(window.getType()==AccessibilityWindowInfo.TYPE_INPUT_METHOD)return null;
+                if(window.getId()==windowId) {own=window;ownCount++;}
+            }
+            if(ownCount!=1 || own==null || own.getType()!=AccessibilityWindowInfo.TYPE_APPLICATION
+                || !own.isActive() || !own.isFocused() || own.getDisplayId()!=0)return null;
+            List<AccessibilityNodeInfo> observed=nodes();AccessibilityNodeInfo image=null;int images=0,titles=0;
+            for(AccessibilityNodeInfo node:observed)if(node.isVisibleToUser() && node.isPassword())return null;
+            for(AccessibilityNodeInfo node:observed)if(APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
+                && node.getWindowId()==windowId) {
+                if(!node.isClickable() && label(node,ReleaseSyncReadScene.path("release-sync-read-canvas"),false) && titleBarControl(node))titles++;
+                if(OriginalSyncImageGate.imageIdentity(string(node.getPackageName()),string(node.getClassName()),
+                    label(node,ReleaseSyncReadScene.ASSET,false),node.getWindowId(),windowId,node.isVisibleToUser(),
+                    node.isEditable(),node.isPassword(),within(node,"Free canvas"))) {images++;image=node;}
+            }
+            if(titles!=1 || images!=1)return null;
+            AccessibilityNodeInfo canvas=image;
+            for(int depth=0;canvas!=null && depth<32 && !label(canvas,"Free canvas",false);depth++)canvas=canvas.getParent();
+            if(canvas==null || !APP.equals(string(canvas.getPackageName())) || !canvas.isVisibleToUser())return null;
+            Rect imageRect=new Rect(),canvasRect=new Rect(),windowRect=new Rect();
+            image.getBoundsInScreen(imageRect);canvas.getBoundsInScreen(canvasRect);own.getBoundsInScreen(windowRect);
+            if(imageRect.isEmpty() || !windowRect.contains(imageRect))return null;
+            if(visibleFilePanel())return null;
+            for(AccessibilityNodeInfo node:observed)if(node.isVisibleToUser() && node.getWindowId()==windowId) {
+                if(node.isPassword())return null;
+                boolean ancestor=false;AccessibilityNodeInfo parent=image;
+                for(int depth=0;parent!=null && depth<64;depth++,parent=parent.getParent())if(node.equals(parent)){ancestor=true;break;}
+                Rect bounds=new Rect();node.getBoundsInScreen(bounds);
+                // The fixed peer Canvas has no edges. Its named, empty SVG
+                // container is transparent; any edge/control/text remains a blocker.
+                boolean emptyConnections=APP.equals(string(node.getPackageName())) && "android.widget.Image".equals(string(node.getClassName()))
+                    && label(node,"Node connections",false) && within(node,"Free canvas");
+                if(OriginalSyncImageGate.occluded(node.isVisibleToUser(),Rect.intersects(imageRect,bounds),ancestor,emptyConnections))return null;
+            }
+            for(AccessibilityWindowInfo other:windows)if(other.getId()!=windowId && other.getDisplayId()==0 && other.getLayer()>=own.getLayer()) {
+                Rect bounds=new Rect();other.getBoundsInScreen(bounds);if(Rect.intersects(imageRect,bounds))return null;
+            }
+            android.view.WindowManager manager=(android.view.WindowManager)getContext().getSystemService(android.content.Context.WINDOW_SERVICE);
+            android.view.Display display=manager.getDefaultDisplay();if(display==null || display.getDisplayId()!=0)return null;
+            android.graphics.Point size=new android.graphics.Point();display.getRealSize(size);
+            return new OriginalSyncImageGate.Frame(uid,windowId,0,new int[]{0,0,size.x,size.y},
+                new int[]{canvasRect.left,canvasRect.top,canvasRect.right,canvasRect.bottom},
+                new int[]{imageRect.left,imageRect.top,imageRect.right,imageRect.bottom});
+        }catch(Exception unavailable) { return null; } // No UI/raw exception export or input fallback.
+    }
+
     /** Read only these fixed peer documents through existing production GUI helpers. */
     protected final String readSignedSyncPeer(String phase) {
         require(stableRelease && "cc.kronecker.opennexus".equals(APP) && ReleaseSyncReadScene.allowed(phase),

@@ -19,8 +19,13 @@ final class OriginalSyncImageRegion {
     static Region admit(String app, String phase, String nonce, int uid, int pid, int window, int display,
                         int[] screen, int[] canvas, int[] image, long ready, long now, long stableMillis) {
         need(APP.equals(app) && PHASE.equals(phase) && nonce!=null && nonce.matches(UUID));
-        need(uid>=10000 && uid<=19999 && pid>0 && pid<=10000000 && window>=0 && window<=65535 && display==0);
+        need(pid>0 && pid<=10000000);
         need(ready>=0 && now>=ready && now-ready<=2000 && stableMillis>=600 && stableMillis<=10000);
+        return geometry(uid,window,display,screen,canvas,image);
+    }
+    /** GUI geometry has no authority to bind the product PID; the host/helper does that. */
+    static Region geometry(int uid,int window,int display,int[] screen,int[] canvas,int[] image) {
+        need(uid>=10000 && uid<=19999 && window>=0 && window<=65535 && display==0);
         rect(screen);rect(canvas);rect(image);
         need(screen[0]==0 && screen[1]==0 && inside(screen,canvas) && inside(canvas,image));
         int side=Math.min(image[2]-image[0], image[3]-image[1]);need(side>=64 && side<=2048);
