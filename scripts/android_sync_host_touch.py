@@ -52,6 +52,24 @@ def run_hosted_mutation_cycle(subject, phase, label):
     return _run_hosted_cycle(subject, phase, label, 'ReleaseSyncMutationRuntimeProbe')
 
 
+def retain_post_input_owner(subject, process, pid, label):
+    """Read-only ownership facts after the one command, before releasing its driver."""
+    facts=dict(input_command_returned=True,native_cycle_acknowledged=False,observation_unavailable=False)
+    for name,observe in (
+        ('original_instrumentation_alive',lambda:process.poll() is None),
+        ('same_original_PID',lambda:subject.shell('pidof',APP).stdout.strip()==pid),
+        ('app_resumed',lambda:ReleaseAuthBackground.app_is_resumed(subject)),
+        ('same_owned_boot_identity',lambda:subject.observer.observe_identity()==subject.identity),
+    ):
+        try:facts[name]=observe()
+        except Exception:
+            facts[name]=None;facts['observation_unavailable']=True
+    atomic_json(subject.output/(label+'-host-touch-after-input-owner.json'),facts)
+    require(not facts['observation_unavailable'] and all(facts[k] is True for k in (
+        'original_instrumentation_alive','same_original_PID','app_resumed','same_owned_boot_identity')),
+        'SYNC_HOST_TOUCH_OWNER_CHANGED_AFTER_INPUT_NO_FINISH')
+
+
 def _run_hosted_cycle(subject, phase, label, entry):
     require(subject.driver_entry == entry and admitted_phase(entry, phase)
             and re.fullmatch('[a-z][a-z0-9-]{0,47}', label), 'SYNC_HOST_TOUCH_PHASE')
@@ -98,6 +116,7 @@ def _run_hosted_cycle(subject, phase, label, entry):
         # A standard OS touchscreen command, never a WebView or product IPC.
         subject.original_command(label + '-host-touch', ('shell', '-T', shlex.join(
             ('input', 'touchscreen', 'tap', str(value['x']), str(value['y'])))), timeout=10)
+        retain_post_input_owner(subject,process,pid,label)
         finish = 'no_backup/owned-sync-touch-' + value['driver_intent_id'] + '.finish'
         command = ('shell', '-T', 'run-as ' + DRIVER + ' sh -c ' + shlex.quote(
             'umask 077; test ! -e ' + finish + ' && test ! -L ' + finish + ' && cat > ' + finish))

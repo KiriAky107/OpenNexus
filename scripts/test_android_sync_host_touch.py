@@ -112,6 +112,9 @@ class HostTouch(unittest.TestCase):
             command=json.loads((Path(folder)/'first-cycle-host-touch-intent.json').read_bytes())
             self.assertEqual(journal['phase'],'cycle');self.assertNotIn('arguments',journal)
             self.assertEqual(command['arguments'],list(actual[0]));self.assertNotIn('phase',command)
+            after=json.loads((Path(folder)/'first-cycle-host-touch-after-input-owner.json').read_bytes())
+            self.assertTrue(after['original_instrumentation_alive'] and after['same_original_PID'] and after['app_resumed'] and after['same_owned_boot_identity'])
+            self.assertFalse(after['native_cycle_acknowledged'])
             before=subject.device.call_count
             with self.assertRaises(FileExistsError):self.execute(subject,Process())
             self.assertEqual(subject.device.call_count,before)
@@ -131,6 +134,21 @@ class HostTouch(unittest.TestCase):
             original=json.loads((Path(folder)/'first-cycle-host-touch-result.json').read_bytes())
             self.assertTrue(original['unknown_result']);self.assertFalse(original['automatic_retry'])
             self.assertFalse((Path(folder)/'first-cycle-host-touch-finish-intent.json').exists())
+
+    def test_original_command_returned_but_changed_boot_never_finishes_or_retries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            subject,_=self.subject(folder);subject.original_command=ReleaseUpgrade.original_command.__get__(subject)
+            subject.observer.observe_identity.side_effect=[subject.identity,{'owner':'changed'}]
+            process=Process()
+            with self.assertRaises(RuntimeError):self.execute(subject,process)
+            actual=[v for v in subject.device.call_args_list if v.args[:2]==('shell','-T') and v.args[2].startswith('input touchscreen')]
+            self.assertEqual(len(actual),1)
+            self.assertEqual(json.loads((Path(folder)/'first-cycle-host-touch-result.json').read_bytes()),dict(returncode=0))
+            after=json.loads((Path(folder)/'first-cycle-host-touch-after-input-owner.json').read_bytes())
+            self.assertTrue(after['input_command_returned'] and after['same_original_PID'] and after['original_instrumentation_alive'])
+            self.assertFalse(after['same_owned_boot_identity']);self.assertFalse(after['native_cycle_acknowledged'])
+            self.assertFalse((Path(folder)/'first-cycle-host-touch-finish-intent.json').exists())
+            process.terminate.assert_called_once();self.assertFalse(subject.phases)
 
 
 if __name__=='__main__':unittest.main()
