@@ -3,6 +3,7 @@
 No screenshot, product run-as, arbitrary crop/path input, permission grant or
 capture fallback. Failed or unknown original commands are recorded, never retried.
 """
+import base64
 import json
 import re
 import shlex
@@ -21,6 +22,57 @@ PHASE = 'release-sync-image'
 UUID = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
 READY = 'no_backup/owned-sync-image-ready.json'
 HELPER = DRIVER+'.OwnedImageCrop'
+
+
+def installed_driver_path(raw):
+    """API36 getNextCodePath: two canonical 16-byte URL-safe Base64 tokens.
+
+    AOSP frameworks/base99b01a65 services/core/.../pm/PackageManagerServiceUtils
+    prefixes the first directory with ~~ and the second with the exact package.
+    This is not a generic /data/app or arbitrary APK/path admission.
+    """
+    require(type(raw) is bytes and 0<len(raw)<=4096,'SYNC_IMAGE_INSTALLED_DRIVER_OUTPUT_BOUND')
+    lines=raw.decode('ascii').splitlines()
+    pattern=r'package:(/data/app/~~([A-Za-z0-9_-]{22}==)/'+re.escape(DRIVER)+r'-([A-Za-z0-9_-]{22}==)/base\.apk)'
+    match=re.fullmatch(pattern,lines[0]) if len(lines)==1 else None
+    require(match is not None,'SYNC_IMAGE_INSTALLED_DRIVER_PATH')
+    require(raw in (lines[0].encode(),lines[0].encode()+b'\n',lines[0].encode()+b'\r\n'),'SYNC_IMAGE_INSTALLED_DRIVER_LINE_END')
+    for token in match.group(2,3):
+        decoded=base64.b64decode(token,altchars=b'-_',validate=True)
+        require(len(decoded)==16 and base64.urlsafe_b64encode(decoded).decode('ascii')==token,'SYNC_IMAGE_INSTALLED_DRIVER_TOKEN')
+    return match[1]
+
+
+def bind_installed_helper(subject,label):
+    exclusive(subject.output/(label+'-helper-binding-intent.json'),json.dumps(dict(package=DRIVER,
+        readonly=True,original_driver_APK_not_uploaded=True,automatic_retry=False)).encode())
+    stage='pm-path'
+    def read(name,*args):
+        result=subject.shell(*args,check=False)
+        require(len(result.stdout)<=4096 and len(result.stderr)<=4096,'SYNC_IMAGE_HELPER_METADATA_BOUND')
+        exclusive(subject.output/(label+'-'+name+'.stdout'),result.stdout)
+        exclusive(subject.output/(label+'-'+name+'.stderr'),result.stderr)
+        atomic_json(subject.output/(label+'-'+name+'-result.json'),dict(returncode=result.returncode,readonly=True))
+        require(result.returncode==0,'SYNC_IMAGE_HELPER_METADATA_READ_FAILED');return result.stdout
+    try:
+        apk=installed_driver_path(read('driver-pm-path','pm','path',DRIVER))
+        stage='canonical-path'
+        parts=apk.split('/');parents=['/'.join(parts[:n]) for n in (3,4,5,6)]
+        script=' && '.join('test ! -L '+shlex.quote(path) for path in parents)
+        script+=' && test -f '+shlex.quote(apk)+' && readlink -f '+shlex.quote(apk)
+        canonical=read('driver-canonical-path','sh','-c',script)
+        require(canonical==apk.encode()+b'\n','SYNC_IMAGE_INSTALLED_DRIVER_ALIAS')
+        stage='original-byte-hash';built=subject.tools/'driver/driver.apk'
+        require(built.is_file() and not built.is_symlink(),'SYNC_IMAGE_ORIGINAL_DRIVER_APK')
+        expected=digest(built);observed=read('driver-sha256','sha256sum',apk).decode('ascii').strip().split()
+        require(observed==[expected,apk],'SYNC_IMAGE_INSTALLED_DRIVER_BYTES')
+        atomic_json(subject.output/(label+'-helper-binding.json'),dict(driver_APK_sha256=expected,installed_path=apk,exact_class=HELPER,
+            canonical_path_and_no_symlinks_verified=True,original_driver_APK_not_uploaded=True,no_helper_rebuild=True))
+        return apk
+    except Exception as error:
+        atomic_json(subject.output/(label+'-helper-binding-failure.json'),dict(stage=stage,error_type=type(error).__name__,
+            image_instrumentation_or_capture_dispatched=False,automatic_retry=False))
+        raise
 
 
 def closed_json(raw):
@@ -90,16 +142,16 @@ def run_image(subject, label):
         four_8x8_source_crops_only=True,automatic_retry=False)).encode())
     subject.stop()
     subject.original_command(label+'-launch',('shell','-T',shlex.join(('am','start','-W','-n',subject.activity))))
-    pid=subject.shell('pidof',APP).stdout.strip();require(re.fullmatch(rb'[1-9][0-9]{0,6}',pid),'SYNC_IMAGE_ORIGINAL_PID')
-    # Bind the installed helper class to the original, privately built driver.
-    installed=subject.shell('pm','path',DRIVER).stdout.decode('ascii').splitlines()
-    require(len(installed)==1 and re.fullmatch(r'package:/data/app/(?:[A-Za-z0-9_+=.-]+/){1,3}base\.apk',installed[0]),'SYNC_IMAGE_INSTALLED_DRIVER_PATH')
-    apk=installed[0][len('package:'):]; built=subject.tools/'driver/driver.apk'
-    require(built.is_file() and not built.is_symlink(),'SYNC_IMAGE_ORIGINAL_DRIVER_APK')
-    expected=digest(built);observed=subject.shell('sha256sum',apk).stdout.decode('ascii').strip().split()
-    require(observed==[expected,apk],'SYNC_IMAGE_INSTALLED_DRIVER_BYTES')
-    atomic_json(subject.output/(label+'-helper-binding.json'),dict(driver_APK_sha256=expected,installed_path=apk,exact_class=HELPER,
-        original_driver_APK_not_uploaded=True,no_helper_rebuild=True))
+    observed_pid=subject.shell('pidof',APP,check=False)
+    require(len(observed_pid.stdout)<=4096 and len(observed_pid.stderr)<=4096,'SYNC_IMAGE_PID_OUTPUT_BOUND')
+    exclusive(subject.output/(label+'-image-process.stdout'),observed_pid.stdout)
+    exclusive(subject.output/(label+'-image-process.stderr'),observed_pid.stderr)
+    atomic_json(subject.output/(label+'-image-process-result.json'),dict(returncode=observed_pid.returncode,readonly=True))
+    pid=observed_pid.stdout.strip()
+    require(observed_pid.returncode==0 and re.fullmatch(rb'[1-9][0-9]{0,6}',pid),'SYNC_IMAGE_ORIGINAL_PID')
+    # Observe the original read-only path/hash even if admission fails, before
+    # any instrumentation or compositor action. No product run-as is involved.
+    apk=bind_installed_helper(subject,label)
     args=('shell','-T',shlex.join(('am','instrument','-w','-e','phase',PHASE,DRIVER+'/.ReleaseSyncImageRuntimeProbe')))
     exclusive(subject.output/(label+'-instrument-intent.json'),json.dumps(dict(arguments=list(args),automatic_retry=False)).encode())
     process=subprocess.Popen([str(subject.adb),'-s',subject.args.serial,*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE)

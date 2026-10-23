@@ -2,6 +2,7 @@
 from copy import deepcopy
 import binascii
 import json
+import shlex
 from pathlib import Path
 import struct
 import subprocess
@@ -104,13 +105,15 @@ class ImageHostChecks(unittest.TestCase):
         subject=SimpleNamespace(output=output,tools=tools,args=SimpleNamespace(serial='emulator-5562'),adb=Path('not-launched-adb'),
             activity=host.APP+'/.MainActivity',identity={'boot_id':'11111111-1111-1111-1111-111111111111'},phases=[],stop=Mock())
         subject.observer=SimpleNamespace(observe_identity=Mock(return_value=subject.identity))
-        apk='/data/app/owned/driver/base.apk'
+        apk='/data/app/~~AAECAwQFBgcICQoLDA0ODw==/'+host.DRIVER+'-Dw4NDAsKCQgHBgUEAwIBAA==/base.apk'
         def shell(*args,**kw):
             nonlocal reads
             stdout=b''
             if args==('pidof',host.APP):stdout=b'1234\n'
             elif args==('pm','path',host.DRIVER):stdout=('package:'+apk+'\n').encode()
             elif args==('sha256sum',apk):stdout=(host.digest(tools/'driver/driver.apk')+'  '+apk+'\n').encode()
+            elif args[:2]==('sh','-c'):
+                self.assertIn(shlex.join(('readlink','-f',apk)),args[2]);self.assertIn('test ! -L /data/app',args[2]);stdout=(apk+'\n').encode()
             elif args==('cat','/proc/uptime'):stdout=b'1.100 0\n'
             elif args[:3]==('run-as',host.DRIVER,'sh'):
                 reads+=1;stdout=b'{"nonce":' if partial and reads==1 else json.dumps(value,separators=(',',':')).encode()
@@ -174,6 +177,42 @@ class ImageHostChecks(unittest.TestCase):
                 self.assertEqual(len(commands),1 if stage=='after' else 0)
                 self.assertFalse(list(subject.output.glob('*.png')));self.assertFalse(list(subject.output.glob('*finish-intent*')))
                 process.terminate.assert_called_once()
+
+    def test_exact_API36_randomized_driver_path_only_not_foreign_split_alias_or_bad_Base64(self):
+        apk='/data/app/~~AAECAwQFBgcICQoLDA0ODw==/'+host.DRIVER+'-Dw4NDAsKCQgHBgUEAwIBAA==/base.apk'
+        self.assertEqual(host.installed_driver_path(('package:'+apk+'\n').encode()),apk)
+        values=[apk.replace(host.DRIVER,host.APP),apk.replace('/base.apk','/split.apk'),apk.replace('/data/app/','/data/local/tmp/'),
+            apk.replace('/base.apk','/../base.apk'),apk.replace('~~',''),apk.replace('AAECAwQFBgcICQoLDA0ODw==','AAECAwQFBgcICQoLDA0ODx=='),
+            apk.replace('==','='),apk.replace('/base.apk','/dir/base.apk')]
+        for value in values:
+            with self.assertRaises(RuntimeError):host.installed_driver_path(('package:'+value+'\n').encode())
+        for value in (('package:'+apk+'\n')*2,'package:'+apk+'\n\n','package:'+apk+'\nsecret','package:'+apk+'\v'):
+            with self.assertRaises(RuntimeError):host.installed_driver_path(value.encode())
+
+    def test_original_helper_path_read_alias_or_hash_failure_retained_before_any_GUI_launch(self):
+        for mode in ('foreign','alias','bad-hash','command-failed','missing-pid'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as folder:
+                subject,commands=self.subject(folder);original=subject.shell
+                def shell(*args,**kw):
+                    result=original(*args,**kw)
+                    if mode=='foreign' and args[:2]==('pm','path'):result.stdout=result.stdout.replace(host.DRIVER.encode(),host.APP.encode())
+                    if mode=='alias' and args[:2]==('sh','-c'):result.stdout=b'/data/app/alias/base.apk\n'
+                    if mode=='bad-hash' and args[:1]==('sha256sum',):result.stdout=result.stdout.replace(result.stdout[:64],b'0'*64)
+                    if mode=='command-failed' and args[:2]==('pm','path'):result.returncode=1;result.stderr=b'owned path unavailable\n'
+                    if mode=='missing-pid' and args[:1]==('pidof',):result.returncode=1;result.stdout=b''
+                    return result
+                subject.shell=shell
+                with patch.object(host,'require_hosted_emulator'),patch.object(host.subprocess,'Popen') as instrument:
+                    with self.assertRaises(RuntimeError):host.run_image(subject,'canvas-image')
+                    instrument.assert_not_called()
+                self.assertFalse(commands);self.assertFalse(list(subject.output.glob('*compositor*')))
+                if mode=='missing-pid':
+                    self.assertTrue((subject.output/'canvas-image-image-process-result.json').exists())
+                    self.assertFalse((subject.output/'canvas-image-helper-binding-intent.json').exists());continue
+                self.assertTrue((subject.output/'canvas-image-driver-pm-path.stdout').exists())
+                failure=json.loads((subject.output/'canvas-image-helper-binding-failure.json').read_bytes())
+                self.assertFalse(failure['image_instrumentation_or_capture_dispatched'])
+                self.assertFalse(failure['automatic_retry'])
 
 
 if __name__=='__main__':unittest.main()
