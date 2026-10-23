@@ -92,6 +92,7 @@ public class RuntimeProbe extends Instrumentation {
         } finally {
             emitImageDiagnostic(imageDiagnostic.summary());
             emitImageDiagnostic(imageDiagnostic.overlapSummary());
+            emitImageDiagnostic(imageDiagnostic.contextSummary());
         }
     }
     private void emitImageDiagnostic(String line) {
@@ -147,6 +148,7 @@ public class RuntimeProbe extends Instrumentation {
                     && label(node,"Node connections",false) && within(node,"Free canvas");
                 if(OriginalSyncImageGate.occluded(node.isVisibleToUser(),Rect.intersects(imageRect,bounds),ancestor,emptyConnections)) {
                     emitImageDiagnostic(imageDiagnostic.overlap(imageOverlapKind(node,image),node.isClickable(),node.isEditable(),node.getChildCount()));
+                    emitImageDiagnostic(imageDiagnostic.context(imageContainerRole(node),OriginalSyncImageDiagnostic.context(new ImageAncestor(node,windowId))));
                     return imageUnknown(OriginalSyncImageDiagnostic.Guard.CONTENT_OVERLAP,titles,images);
                 }
             }
@@ -163,6 +165,32 @@ public class RuntimeProbe extends Instrumentation {
             }catch(IllegalStateException invalid){return imageUnknown(OriginalSyncImageDiagnostic.Guard.REGION,titles,images);}
             emitImageDiagnostic(imageDiagnostic.observe(OriginalSyncImageDiagnostic.Guard.FRAME_CANDIDATE,titles,images));return frame;
         }catch(Exception unavailable) { return imageUnknown(OriginalSyncImageDiagnostic.Guard.UNAVAILABLE,-1,-1); } // No raw exception or input fallback.
+    }
+
+    /** Read-only closed ancestry facts, consulted only after overlap rejection. */
+    private final class ImageAncestor implements OriginalSyncImageDiagnostic.Ancestor {
+        private final AccessibilityNodeInfo node;private final int window;
+        ImageAncestor(AccessibilityNodeInfo node,int window){this.node=node;this.window=window;}
+        public boolean sameOwnerWindow(){return APP.equals(string(node.getPackageName())) && node.getWindowId()==window;}
+        public boolean password(){return node.isPassword();}
+        public OriginalSyncImageDiagnostic.Anchor fixedAnchor() {
+            if(label(node,"Node connections",false))return OriginalSyncImageDiagnostic.Anchor.CONNECTIONS;
+            if(label(node,"Free canvas",false))return OriginalSyncImageDiagnostic.Anchor.CANVAS;
+            if(label(node,"file: "+ReleaseSyncReadScene.ASSET,false))return OriginalSyncImageDiagnostic.Anchor.IMAGE_REFERENCE;
+            if(label(node,"text: "+ReleaseSyncReadScene.CANVAS_TEXT,false))return OriginalSyncImageDiagnostic.Anchor.PEER_TEXT;
+            if(label(node,ReleaseSyncReadScene.path("release-sync-read-canvas"),false))return OriginalSyncImageDiagnostic.Anchor.TITLE;
+            return OriginalSyncImageDiagnostic.Anchor.NONE;
+        }
+        public OriginalSyncImageDiagnostic.Ancestor parent() {
+            AccessibilityNodeInfo parent=node.getParent();return parent==null?null:new ImageAncestor(parent,window);
+        }
+    }
+    private OriginalSyncImageDiagnostic.ContainerRole imageContainerRole(AccessibilityNodeInfo node) {
+        String role=string(node.getClassName());
+        if("android.view.View".equals(role))return OriginalSyncImageDiagnostic.ContainerRole.VIEW;
+        if("android.view.ViewGroup".equals(role))return OriginalSyncImageDiagnostic.ContainerRole.VIEW_GROUP;
+        if("android.webkit.WebView".equals(role))return OriginalSyncImageDiagnostic.ContainerRole.WEB_VIEW;
+        return OriginalSyncImageDiagnostic.ContainerRole.OTHER;
     }
 
     /** Classify only the first already-rejected overlap; never exempts a node. */

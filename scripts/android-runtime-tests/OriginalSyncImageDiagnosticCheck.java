@@ -2,6 +2,16 @@ package cc.kronecker.opennexus.testdriver;
 
 public final class OriginalSyncImageDiagnosticCheck {
     private static void need(boolean value){if(!value)throw new AssertionError("static image observations changed");}
+    private static final class Node implements OriginalSyncImageDiagnostic.Ancestor {
+        boolean owner=true,password;OriginalSyncImageDiagnostic.Anchor anchor=OriginalSyncImageDiagnostic.Anchor.NONE;
+        Node parent;int reads;
+        public boolean sameOwnerWindow(){return owner;}
+        public boolean password(){return password;}
+        public OriginalSyncImageDiagnostic.Anchor fixedAnchor(){
+            if(!owner || password)throw new AssertionError("forbidden label read");reads++;return anchor;
+        }
+        public OriginalSyncImageDiagnostic.Ancestor parent(){return parent;}
+    }
     public static void main(String[] ignored) {
         int cases=0;OriginalSyncImageDiagnostic d=new OriginalSyncImageDiagnostic();
         need(d.summary().contains("last_guard=UNSAMPLED")&&d.summary().contains("samples_capped4096=0"));cases++;
@@ -47,6 +57,42 @@ public final class OriginalSyncImageDiagnosticCheck {
             OriginalSyncImageDiagnostic one=new OriginalSyncImageDiagnostic();String line=one.overlap(kind,false,false,0);
             need(line.length()<160 && line.matches("OPENNEXUS_IMAGE_OVERLAP_GUARD kind=[A-Z_]+ clickable=0 editable=0 children_capped64=0"));
         }cases++;
+        OriginalSyncImageDiagnostic c=new OriginalSyncImageDiagnostic();Node child=new Node(),parent=new Node();child.parent=parent;
+        parent.anchor=OriginalSyncImageDiagnostic.Anchor.CONNECTIONS;
+        OriginalSyncImageDiagnostic.Context context=OriginalSyncImageDiagnostic.context(child);
+        need(context.anchor==OriginalSyncImageDiagnostic.Anchor.CONNECTIONS&&context.depth==1);cases++;
+        need(c.context(OriginalSyncImageDiagnostic.ContainerRole.VIEW,context).equals("OPENNEXUS_IMAGE_OVERLAP_CONTEXT role=VIEW anchor=CONNECTIONS depth_capped64=1"));cases++;
+        parent.anchor=OriginalSyncImageDiagnostic.Anchor.CANVAS;context=OriginalSyncImageDiagnostic.context(child);
+        need(context.anchor==OriginalSyncImageDiagnostic.Anchor.CANVAS&&context.depth==1);cases++;
+        for(int mode=0;mode<2;mode++) {
+            parent.reads=0;parent.owner=mode!=0;parent.password=mode==1;
+            context=OriginalSyncImageDiagnostic.context(child);
+            need(context.anchor==OriginalSyncImageDiagnostic.Anchor.UNVERIFIED&&parent.reads==0);cases++;
+        }
+        parent.owner=true;parent.password=false;parent.anchor=OriginalSyncImageDiagnostic.Anchor.NONE;parent.parent=child;
+        context=OriginalSyncImageDiagnostic.context(child);
+        need(context.anchor==OriginalSyncImageDiagnostic.Anchor.UNVERIFIED&&context.depth==64);cases++;
+        context=OriginalSyncImageDiagnostic.context((OriginalSyncImageDiagnostic.Ancestor)null);
+        need(context.anchor==OriginalSyncImageDiagnostic.Anchor.UNVERIFIED&&context.depth==0);cases++;
+        child.parent=null;
+        context=OriginalSyncImageDiagnostic.context(child);
+        need(context.anchor==OriginalSyncImageDiagnostic.Anchor.UNVERIFIED&&context.depth==1);cases++;
+        for(OriginalSyncImageDiagnostic.Anchor a:OriginalSyncImageDiagnostic.Anchor.values())if(a!=OriginalSyncImageDiagnostic.Anchor.NONE&&a!=OriginalSyncImageDiagnostic.Anchor.UNVERIFIED&&a!=OriginalSyncImageDiagnostic.Anchor.UNOBSERVED) {
+            child.anchor=a;need(OriginalSyncImageDiagnostic.context(child).anchor==a);
+        }cases++;
+        for(int i=0;i<5000;i++) {
+            child.anchor=i%2==0?OriginalSyncImageDiagnostic.Anchor.CANVAS:OriginalSyncImageDiagnostic.Anchor.CONNECTIONS;
+            c.context(OriginalSyncImageDiagnostic.ContainerRole.VIEW,OriginalSyncImageDiagnostic.context(child));
+            c.overlap(OriginalSyncImageDiagnostic.Overlap.OTHER_CONTAINER,false,false,i);
+        }
+        need(c.contextSummary().contains("samples_capped4096=4096")&&c.contextSummary().contains("shared_transitions_emitted=32"));cases++;
+        child.anchor=OriginalSyncImageDiagnostic.Anchor.IMAGE_REFERENCE;
+        need(c.context(OriginalSyncImageDiagnostic.ContainerRole.VIEW_GROUP,OriginalSyncImageDiagnostic.context(child))==null);
+        need(c.contextSummary().contains("last_role=VIEW_GROUP last_anchor=IMAGE_REFERENCE"));cases++;
+        for(int mode=0;mode<3;mode++) {
+            boolean refused=false;try{c.context(mode==0?null:mode==1?OriginalSyncImageDiagnostic.ContainerRole.UNOBSERVED:OriginalSyncImageDiagnostic.ContainerRole.VIEW,mode==2?null:context);}
+            catch(IllegalStateException safe){refused=true;}need(refused);cases++;
+        }
         System.out.println("OWNED_IMAGE_DIAGNOSTIC_OK cases="+cases+" reasons="+OriginalSyncImageDiagnostic.Guard.values().length
             +" overlap_kinds="+OriginalSyncImageDiagnostic.Overlap.values().length+" raw_UI_or_capture_exported=0");
     }

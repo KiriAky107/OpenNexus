@@ -62,6 +62,8 @@ class SyncImageGUIChecks(unittest.TestCase):
         self.assertIn('return imageUnknown(OriginalSyncImageDiagnostic.Guard.CONTENT_OVERLAP',blocked)
         self.assertNotIn('continue',blocked)
         self.assertIn('imageDiagnostic.overlapSummary()',method)
+        self.assertIn('imageDiagnostic.contextSummary()',method)
+        self.assertIn('OriginalSyncImageDiagnostic.context(new ImageAncestor(node,windowId))',blocked)
 
 
 if __name__=='__main__':unittest.main()
