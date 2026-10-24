@@ -36,7 +36,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import os,re,subprocess,sys
-          assert os.environ.get('RUNTIME_SCENE','upgrade') in ('upgrade','media','auth','auth-recovery','auth-background','auth-certificate','sync','sync-read','sync-image','sync-mutations')
+          assert os.environ.get('RUNTIME_SCENE','upgrade') in ('upgrade','media','auth','auth-recovery','auth-background','auth-certificate','sync','sync-read','sync-image','sync-mutations','sync-recovery')
           assert re.fullmatch(r'[0-9a-f]{40}',os.environ['EXPECTED_COMMIT'])
           assert os.environ['EXPECTED_COMMIT']==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           assert not subprocess.check_output(['git','status','--porcelain'])
@@ -58,7 +58,7 @@ jobs:
           retention-days: 14
 
   release-upgrade:
-    name: ${{ inputs.scene == 'sync-mutations' && 'release-sync-mutations' || inputs.scene == 'sync-image' && 'release-sync-image' || inputs.scene == 'sync-read' && 'release-sync-read' || inputs.scene == 'sync' && 'release-sync' || inputs.scene == 'auth-certificate' && 'release-auth-certificate' || inputs.scene == 'auth-background' && 'release-auth-background' || inputs.scene == 'auth-recovery' && 'release-auth-recovery' || inputs.scene == 'auth' && 'release-auth' || inputs.scene == 'media' && 'release-media' || 'release-upgrade' }}
+    name: ${{ inputs.scene == 'sync-recovery' && 'release-sync-recovery' || inputs.scene == 'sync-mutations' && 'release-sync-mutations' || inputs.scene == 'sync-image' && 'release-sync-image' || inputs.scene == 'sync-read' && 'release-sync-read' || inputs.scene == 'sync' && 'release-sync' || inputs.scene == 'auth-certificate' && 'release-auth-certificate' || inputs.scene == 'auth-background' && 'release-auth-background' || inputs.scene == 'auth-recovery' && 'release-auth-recovery' || inputs.scene == 'auth' && 'release-auth' || inputs.scene == 'media' && 'release-media' || 'release-upgrade' }}
     needs: fetch-inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 55
@@ -81,27 +81,27 @@ jobs:
           name: OpenNexus-signed-runtime-inputs-${{ github.run_id }}-${{ github.run_attempt }}
           path: .build/android-release-runtime/inputs
       - uses: actions/checkout@v7
-        if: inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations'
+        if: inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery'
         with:
           repository: KiriAky107/Sync-for-OpenNexus
           ref: 29e2e6d373ea752352981bdad05d34a7a0d9c3d9
           path: .build/android-auth-source
           persist-credentials: false
       - uses: actions/setup-python@v7
-        if: inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations'
+        if: inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery'
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
-        if: inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations'
+        if: inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery'
       - name: Prepare only the fixed independent HTTPS auth origin
         env:
           RUNTIME_SCENE: ${{ inputs.scene }}
-        if: inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations'
+        if: inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery'
         run: |
           set -euo pipefail
           uv sync --frozen --project .build/android-auth-source
           mkdir -p .build/android-runtime .build/android-release-runtime/origin-proof
-          if [[ "$RUNTIME_SCENE" == sync || "$RUNTIME_SCENE" == sync-read || "$RUNTIME_SCENE" == sync-image || "$RUNTIME_SCENE" == sync-mutations ]]; then
+          if [[ "$RUNTIME_SCENE" == sync || "$RUNTIME_SCENE" == sync-read || "$RUNTIME_SCENE" == sync-image || "$RUNTIME_SCENE" == sync-mutations || "$RUNTIME_SCENE" == sync-recovery ]]; then
             .build/android-auth-source/.venv/bin/python scripts/android_auth_hosted.py prepare --fixture sync > .build/android-release-runtime/origin-proof/origin.json
           else
             .build/android-auth-source/.venv/bin/python scripts/android_auth_hosted.py prepare > .build/android-release-runtime/origin-proof/origin.json
@@ -194,8 +194,14 @@ jobs:
           .build/android-auth-source/.venv/bin/python scripts/android_release_sync_mutations.py
           --inputs .build/android-release-runtime/inputs --sdk "$ANDROID_HOME"
           --java "$JAVA_HOME/bin/java" --output .build/android-release-runtime/evidence
+      - name: Verify one original lost commit response and explicit changes read recovery
+        if: inputs.scene == 'sync-recovery'
+        run: >-
+          .build/android-auth-source/.venv/bin/python scripts/android_release_sync_recovery.py
+          --inputs .build/android-release-runtime/inputs --sdk "$ANDROID_HOME"
+          --java "$JAVA_HOME/bin/java" --output .build/android-release-runtime/evidence
       - name: Stop only the original owned HTTPS auth origin
-        if: always() && (inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations')
+        if: always() && (inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery')
         run: |
           mkdir -p .build/android-release-runtime/origin-proof
           python3 scripts/android_auth_hosted.py stop > .build/android-release-runtime/origin-proof/cleanup.json
@@ -207,7 +213,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: OpenNexus-signed-release-${{ inputs.scene == 'sync-mutations' && 'sync-mutations' || inputs.scene == 'sync-image' && 'sync-image' || inputs.scene == 'sync-read' && 'sync-read' || inputs.scene == 'sync' && 'sync' || inputs.scene == 'auth-certificate' && 'auth-certificate' || inputs.scene == 'auth-background' && 'auth-background' || inputs.scene == 'auth-recovery' && 'auth-recovery' || inputs.scene == 'auth' && 'auth' || inputs.scene == 'media' && 'media' || 'upgrade' }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: OpenNexus-signed-release-${{ inputs.scene == 'sync-recovery' && 'sync-recovery' || inputs.scene == 'sync-mutations' && 'sync-mutations' || inputs.scene == 'sync-image' && 'sync-image' || inputs.scene == 'sync-read' && 'sync-read' || inputs.scene == 'sync' && 'sync' || inputs.scene == 'auth-certificate' && 'auth-certificate' || inputs.scene == 'auth-background' && 'auth-background' || inputs.scene == 'auth-recovery' && 'auth-recovery' || inputs.scene == 'auth' && 'auth' || inputs.scene == 'media' && 'media' || 'upgrade' }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             .build/android-release-runtime/evidence/
             .build/android-release-runtime/emulator.log
