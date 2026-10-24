@@ -75,7 +75,8 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
         }
     }
 
-    private void cycle(String original) throws Exception {
+    protected boolean expectsUnknownOriginalCycle(String phase) { return false; }
+    protected final void cycle(String original) throws Exception {
         readCurrent(); signedIn(); click("Read queue and original records");
         waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
         // Distinct explicit cycles have separate once-only driver intents.
@@ -96,7 +97,13 @@ public class SyncRuntimeProbe extends AuthRuntimeProbe {
         try {
             observation.dispatch(()->startOriginalCycleTouch(original));
             stage="wait-original-cycle-completion-"+original;
-            waitPresent(node->label(node,"Cycle completed"));
+            if (expectsUnknownOriginalCycle(original)) {
+                waitPresent(node->label(node,"Cycle did not complete"));
+                waitPresent(node->text(node.getText()).equals("The previous outcome is not fully confirmed. Read the queue and original records before explicitly continuing; no new operation is sent automatically."));
+                waitFor(node->label(node,"Sync one cycle now") && !node.isEnabled(),true);
+                Bundle outcome=new Bundle();outcome.putString("stream","OPENNEXUS_SYNC_EXPECTED_UNKNOWN_UI failed_cycle_observed=true unconfirmed_outcome_observed=true cycle_button_disabled=true native_original_state_verified=false raw_UI_recorded=false\n");
+                sendStatus(1,outcome);
+            } else waitPresent(node->label(node,"Cycle completed"));
         } finally {
             originalAutomation.setOnAccessibilityEventListener(null);
             String inputKind=hostedCycleTouch("Sync one cycle now")?"hosted_adb_touchscreen_tap"

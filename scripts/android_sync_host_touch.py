@@ -15,7 +15,8 @@ UUID = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
 
 def admitted_phase(entry, phase):
     return (entry == 'ReleaseSyncRuntimeProbe' and phase in ('cycle', 'cycle-incoming')
-            or entry == 'ReleaseSyncMutationRuntimeProbe' and phase in ('cycle-rename', 'cycle-delete'))
+            or entry == 'ReleaseSyncMutationRuntimeProbe' and phase in ('cycle-rename', 'cycle-delete')
+            or entry == 'ReleaseSyncRecoveryRuntimeProbe' and phase in ('cycle-drop-original', 'cycle-reconcile-original'))
 
 
 def validate_ready(value, phase, elapsed_ms):
@@ -50,6 +51,10 @@ def run_hosted_cycle(subject, phase, label):
 
 def run_hosted_mutation_cycle(subject, phase, label):
     return _run_hosted_cycle(subject, phase, label, 'ReleaseSyncMutationRuntimeProbe')
+
+
+def run_hosted_recovery_cycle(subject, phase, label):
+    return _run_hosted_cycle(subject, phase, label, 'ReleaseSyncRecoveryRuntimeProbe')
 
 
 def retain_post_input_owner(subject, process, pid, label):
@@ -133,7 +138,14 @@ def _run_hosted_cycle(subject, phase, label, entry):
         stdout, stderr = process.communicate(timeout=40); complete = True
         require(process.returncode == 0 and ('OPENNEXUS_RELEASE_SYNC_PHASE_OK ' + phase).encode() in stdout
                 and b'_PHASE_FAILED' not in stdout and b'INSTRUMENTATION_FAILED' not in stdout, 'SYNC_HOST_TOUCH_ORIGINAL_GUI_FAILED')
-        subject.phases.append(dict(phase=phase, label=label, pid=int(pid), passed=True, input_method='hosted_adb_touchscreen_tap'))
+        facts=dict(phase=phase, label=label, pid=int(pid), passed=True, input_method='hosted_adb_touchscreen_tap')
+        if entry == 'ReleaseSyncRecoveryRuntimeProbe':
+            if phase == 'cycle-drop-original':
+                require(b'OPENNEXUS_SYNC_EXPECTED_UNKNOWN_UI failed_cycle_observed=true unconfirmed_outcome_observed=true cycle_button_disabled=true native_original_state_verified=false raw_UI_recorded=false' in stdout,
+                        'SYNC_HOST_TOUCH_ORIGINAL_UNKNOWN_UI_NOT_OBSERVED')
+            facts.update(expected_cycle_result='unknown_original' if phase == 'cycle-drop-original' else 'completed',
+                         native_original_state_verified=False)
+        subject.phases.append(facts)
     finally:
         if not complete:
             if process.poll() is None: process.terminate()
