@@ -8,7 +8,7 @@ from android_auth_runtime import active_intent, expect_requests, provider_accoun
 from android_release_auth import main
 from android_release_observation import APP, StoppedReleaseObserver, exclusive
 from android_release_sync import ReleaseSync, validate_association, read_original_object
-from android_release_sync_recovery_snapshot import NOTE, HASH, project_recovery, preserve_note, same_recovery
+from android_release_sync_recovery_snapshot import NOTE, HASH, project_recovery, preserve_note, preserve_initial_outbox, same_recovery
 from android_release_upgrade import ReleaseUpgrade
 from android_runtime_probe import BODY, require
 from android_sync_fixture import arm_control, control_root
@@ -32,7 +32,7 @@ def validate_auth_provider(value, device, setup_device):
 
 def validate_unknown(before, after, provider_before, provider, device, control, marker):
     preserve_note(before,after); a,b = before['native'],after['native']
-    original, = a['outbox']; job, = b['jobs']; attempt, = b['attempts']
+    archived,original = a['outbox']; job, = b['jobs']; attempt, = b['attempts']
     require(before['recovery_stage'] == 'associated' and after['recovery_stage'] == 'unknown'
             and a['binding'] == b['binding'] and a['association'] == b['association']
             and not provider_before['rows']['revisions'] and provider_before['vault']['sequence'] == 0
@@ -48,7 +48,9 @@ def validate_unknown(before, after, provider_before, provider, device, control, 
             and remote['base_revision'] == 0 and remote['operation'] == 'put' and remote['device_id'] == device
             and remote['size'] == job['size'] == len(BODY.encode()) and remote['hash'] == HASH
             and remote['sequence'] == 1 and b['issuers'] == [dict(operation_id=original['operation_id'],device_id=device)]
-            and b['outbox'] == [dict(original,state='queued')] and job['state'] == 'committing'
+            and b['outbox'] == [archived,dict(original,state='queued')] and job['state'] == 'committing'
+            and before['original_Save_outbox_id'] == after['original_Save_outbox_id'] == archived['operation_id']
+            and before['original_association_upload_id'] == after['original_association_upload_id'] == original['operation_id']
             and job['remote_revision'] is None and attempt['outcome'] == 'failed' and attempt['attempts'] == 1,
             'RELEASE_SYNC_RECOVERY_CHANGED_OR_DUPLICATE_ORIGINAL')
     require(provider['rows']['objects'] == [dict(hash=HASH,size=len(BODY.encode()))]
@@ -66,7 +68,8 @@ def validate_reconciled(before, after, provider_before, provider_after, receipt)
     preserve_note(before,after); a,b = before['native'],after['native']
     require(after['recovery_stage'] == 'reconciled' and b['binding'] == dict(a['binding'],cursor=1)
             and all(b[k] == a[k] for k in ('association','attempts','issuers','conflicts'))
-            and b['outbox'] == [dict(a['outbox'][0],state='acked')]
+            and b['outbox'] == [a['outbox'][0],dict(a['outbox'][1],state='acked')]
+            and all(before[k] == after[k] for k in ('original_Save_outbox_id','original_association_upload_id'))
             and b['jobs'] == [dict(a['jobs'][0],state='acked',remote_revision=1,error=None)]
             and before['original_job_commit'] == after['original_job_commit'],
             'RELEASE_SYNC_RECOVERY_REPLACED_OR_RELABELLED_ORIGINAL')
@@ -124,7 +127,7 @@ class ReleaseSyncRecovery(ReleaseSync):
         setup = Setup(self.owner); prepared = setup.run(); atomic_json(self.output/'independent-setup.json',prepared)
         require(not prepared['provider']['rows']['revisions'],'RELEASE_SYNC_RECOVERY_FRESH_REMOTE')
         self.stage_sync_input(prepared['vault']); self.phase('associate','recovery-association'); frozen = self.original_association()
-        associated,source = self.recovery_snapshot('associated','associated'); preserve_note(seeded,associated)
+        associated,source = self.recovery_snapshot('associated','associated'); preserve_initial_outbox(seeded,associated)
         validate_association(frozen,associated['native'],prepared,login)
         self.recovery_auth_provider = self.observe('recovery-associated')
         validate_auth_provider(self.recovery_auth_provider,login['device_id'],prepared['device_id'])
@@ -163,7 +166,8 @@ class ReleaseSyncRecovery(ReleaseSync):
         result = dict(schema=1,passed=True,kind='android-signed-release-original-commit-read-recovery',package=APP,abi='x86_64',
             tools_commit=os.environ['GITHUB_SHA'],run_id=int(os.environ['GITHUB_RUN_ID']),compiled_source=self.manifest['successor']['source_commit'],
             manifest_sha256=digest(self.inputs/'runtime-inputs.json'),installed_binary=self.identities['successor'],phases=self.phases,
-            original_Save_id=seeded['all_Save_ids'][0],original_login_id=login['operation_id'],Android_device=login['device_id'],
+            original_Save_id=seeded['all_Save_ids'][0],original_association_upload_id=associated['original_association_upload_id'],
+            original_Save_outbox_archived_and_preserved=True,original_login_id=login['operation_id'],Android_device=login['device_id'],
             independent_setup_device=prepared['device_id'],original_association=frozen,original_commit_receipt=receipt,original_drop_control=control,
             service_original_revision_POST_once_and_response_delivery_lost=True,original_failed_attempt_preserved=True,
             original_job_outbox_head_inbox_reconciled_by_explicit_changes_read=True,provider_revision_object_upload_state_unchanged_during_recovery=True,

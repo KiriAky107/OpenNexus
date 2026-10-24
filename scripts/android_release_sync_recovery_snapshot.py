@@ -23,20 +23,24 @@ def project_recovery(snapshot, working, *, stage):
     require(type(stage) is str and stage in STAGES, 'RELEASE_SYNC_RECOVERY_EXACT_STAGE')
     value = _project_owned(snapshot, working, (NOTE,))
     native = value['native']
-    require(len(value['drafts'][NOTE]) == len(value['saves'][NOTE]) == len(value['files']) == len(native['outbox']) == 1,
+    require(len(value['drafts'][NOTE]) == len(value['saves'][NOTE]) == len(value['files']) == 1
+            and len(native['outbox']) == (1 if stage == 'seeded' else 2),
             'RELEASE_SYNC_RECOVERY_UNIQUE_NOTE_SAVE_OUTBOX')
     draft, = value['drafts'][NOTE]; save, = value['saves'][NOTE]
-    file, = value['files']; original, = native['outbox']
+    file, = value['files']; saved = native['outbox'][0]; original = native['outbox'][-1]
     require(all(re.fullmatch(UUID, v) for v in (draft['id'], save['operation_id'], file['id'], original['operation_id']))
             and save['draft_id'] == draft['id'] and save['file_id'] is None and save['expected'] == ''
             and draft['file_id'] == file['id'] == original['file_id']
-            and save['operation_id'] == original['operation_id'] and save['state'] == 'committed' and save['error'] is None
+            and save['operation_id'] == saved['operation_id'] and save['state'] == 'committed' and save['error'] is None
             and type(draft['generation']) is int and draft['generation'] >= 1
             and save['generation'] == draft['generation'] == draft['saved_generation']
             and draft['base_hash'] == file['hash'] == original['hash'] == HASH
             and draft['content'] == save['content'] == BODY and original['operation'] == 'put'
             and original['revision'] == file['revision'] and file['deleted'] == 0,
             'RELEASE_SYNC_RECOVERY_ORIGINAL_SAVE_OR_OUTBOX_CHANGED')
+    require(saved == dict(original,operation_id=save['operation_id'],state='pending' if stage == 'seeded' else 'archived')
+            and (stage == 'seeded' or original['operation_id'] != save['operation_id']),
+            'RELEASE_SYNC_RECOVERY_INITIAL_OUTBOX_LINEAGE_CHANGED')
     with closing(sqlite3.connect((Path(working).resolve()/DATABASES[0]).as_uri()+'?mode=ro', uri=True)) as db:
         db.execute('PRAGMA query_only=ON')
         require(rows(db, 'SELECT id,file_id,path,generation,saved_generation FROM drafts') ==
@@ -96,7 +100,9 @@ def project_recovery(snapshot, working, *, stage):
                     and revision == dict(operation_id=original['operation_id'],file_id=file['id'],base_revision=0,path=NOTE,
                         operation='put',hash=HASH,size=len(BODY.encode()),sequence=1,vault_id=native['binding']['remote_vault']),
                     'RELEASE_SYNC_RECOVERY_APPLIED_ORIGINAL_CHANGED')
-    value.update(recovery_stage=stage, original_job_commit=commits, all_clean_draft_ids=[draft['id']], all_Save_ids=[save['operation_id']])
+    value.update(recovery_stage=stage, original_job_commit=commits, all_clean_draft_ids=[draft['id']], all_Save_ids=[save['operation_id']],
+                 original_Save_outbox_id=saved['operation_id'],
+                 original_association_upload_id=None if stage == 'seeded' else original['operation_id'])
     return value
 
 
@@ -104,6 +110,18 @@ def preserve_note(before, after):
     require(all(before[k] == after[k] for k in ('files','drafts','saves','all_clean_draft_ids','all_Save_ids'))
             and before['raw_sha256']['vault/'+NOTE] == after['raw_sha256']['vault/'+NOTE],
             'RELEASE_SYNC_RECOVERY_ORIGINAL_NOTE_OR_SAVE_CHANGED')
+
+
+def preserve_initial_outbox(seeded, associated):
+    """Verify the fixed product's original association publication, not a retry."""
+    preserve_note(seeded,associated)
+    saved, = seeded['native']['outbox']; archived, upload = associated['native']['outbox']
+    require(seeded['recovery_stage'] == 'seeded' and associated['recovery_stage'] == 'associated'
+            and saved['operation_id'] == seeded['all_Save_ids'][0] == associated['all_Save_ids'][0]
+            and saved['state'] == 'pending' and archived == dict(saved,state='archived')
+            and upload == dict(saved,operation_id=associated['original_association_upload_id'])
+            and upload['operation_id'] != saved['operation_id'],
+            'RELEASE_SYNC_RECOVERY_INITIAL_OUTBOX_PUBLICATION_CHANGED')
 
 
 def same_recovery(before, after):

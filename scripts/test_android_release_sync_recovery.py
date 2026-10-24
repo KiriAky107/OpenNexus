@@ -15,6 +15,7 @@ import test_android_sync_fixture as delivery
 import android_sync_fixture as fixture
 
 OP = '11111111-2222-4333-8444-555555555555'
+SAVE = '51111111-2222-4333-8444-555555555555'
 FILE = '21111111-2222-4333-8444-555555555555'
 DRAFT = '31111111-2222-4333-8444-555555555555'
 CONTROL = '41111111-2222-4333-8444-555555555555'
@@ -42,12 +43,16 @@ def original_fixture(root, stage):
         db.execute('INSERT INTO drafts VALUES(?,?,?,?,?,?,?)',(DRAFT,FILE,snapshots.NOTE,snapshots.HASH,1,1,runtime.BODY))
         # Actual new-note Save freezes file_id=NULL; observe_save updates the
         # draft's new file identity while retaining the original Save payload.
-        db.execute('INSERT INTO save_intents VALUES(?,?,?,?,?,?,?,?,?)',(OP,DRAFT,1,None,snapshots.NOTE,'',runtime.BODY,'committed',None));db.commit()
+        db.execute('INSERT INTO save_intents VALUES(?,?,?,?,?,?,?,?,?)',(SAVE,DRAFT,1,None,snapshots.NOTE,'',runtime.BODY,'committed',None));db.commit()
     with closing(sqlite3.connect(raw/snapshots.DATABASES[1])) as db:
         db.execute('DELETE FROM files WHERE path=?',('release-owned-original.canvas',))
         db.execute('UPDATE files SET id=?',(FILE,))
         state = 'pending' if stage in ('seeded','associated') else 'queued' if stage in ('unknown','unknown-read') else 'acked'
-        db.execute('INSERT INTO outbox VALUES(?,?,?,?,?,?,?)',(OP,FILE,1,snapshots.NOTE,snapshots.HASH,'put',state))
+        # Frozen sync_initial::InitialCommit archives the Save operation, then
+        # publishes its own distinct initial-upload operation for the same file.
+        db.execute('INSERT INTO outbox VALUES(?,?,?,?,?,?,?)',(SAVE,FILE,1,snapshots.NOTE,snapshots.HASH,'put','pending' if stage=='seeded' else 'archived'))
+        if stage!='seeded':
+            db.execute('INSERT INTO outbox VALUES(?,?,?,?,?,?,?)',(OP,FILE,1,snapshots.NOTE,snapshots.HASH,'put',state))
         db.execute('ALTER TABLE sync_jobs ADD COLUMN operation'); db.execute('ALTER TABLE sync_jobs ADD COLUMN base_revision')
         if stage not in ('seeded','associated'):
             complete = stage in ('reconciled','cold')
@@ -112,7 +117,43 @@ class ReleaseRecoveryChecks(unittest.TestCase):
                     value=snapshots.project_recovery(raw,root/'working',stage=stage)
                 self.assertEqual(before,{str(f.relative_to(raw)):f.read_bytes() for f in raw.rglob('*') if f.is_file()})
                 self.assertNotIn('never-read-this',json.dumps(value));self.assertFalse(any('forbidden_credentials' in q for q in queries))
-                self.assertEqual(value['all_Save_ids'],[OP]);self.assertFalse(value['native_RAM_invocation_id_observed'])
+                self.assertEqual(value['all_Save_ids'],[SAVE]);self.assertFalse(value['native_RAM_invocation_id_observed'])
+
+    def test_initial_association_keeps_archived_Save_and_distinct_upload_original_through_recovery(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);seed=projection(root/'seeded','seeded');associated=projection(root/'associated','associated')
+            snapshots.preserve_initial_outbox(seed,associated)
+            self.assertEqual(associated['original_Save_outbox_id'],SAVE)
+            self.assertEqual(associated['original_association_upload_id'],OP)
+            for stage in ('unknown','unknown-read','reconciled','cold'):
+                value=projection(root/stage,stage)
+                self.assertEqual(value['native']['outbox'][0],associated['native']['outbox'][0])
+                self.assertEqual(value['original_association_upload_id'],OP)
+            for mode in ('old-state','old-id','upload-id','upload-hash','missing-archive'):
+                changed=deepcopy(associated)
+                if mode=='old-state':changed['native']['outbox'][0]['state']='pending'
+                if mode=='old-id':changed['native']['outbox'][0]['operation_id']=CONTROL
+                if mode=='upload-id':changed['native']['outbox'][1]['operation_id']=SAVE
+                if mode=='upload-hash':changed['native']['outbox'][1]['hash']='0'*64
+                if mode=='missing-archive':changed['native']['outbox'].pop(0)
+                with self.subTest(mode=mode),self.assertRaises((RuntimeError,ValueError)):
+                    snapshots.preserve_initial_outbox(seed,changed)
+
+    def test_SQLite_rejects_missing_reactivated_replaced_or_foreign_archived_Save_outbox(self):
+        for mode in ('missing','reactivated','replaced','foreign-file','changed-hash','same-id','third-row'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder);raw=original_fixture(root,'associated')
+                with closing(sqlite3.connect(raw/snapshots.DATABASES[1])) as db:
+                    if mode=='missing':db.execute('DELETE FROM outbox WHERE operation_id=?',(SAVE,))
+                    if mode=='reactivated':db.execute("UPDATE outbox SET state='pending' WHERE operation_id=?",(SAVE,))
+                    if mode=='replaced':db.execute('UPDATE outbox SET operation_id=? WHERE operation_id=?',(CONTROL,SAVE))
+                    if mode=='foreign-file':db.execute('UPDATE outbox SET file_id=? WHERE operation_id=?',(CONTROL,SAVE))
+                    if mode=='changed-hash':db.execute('UPDATE outbox SET hash=? WHERE operation_id=?',('0'*64,SAVE))
+                    if mode=='same-id':db.execute('UPDATE outbox SET operation_id=? WHERE operation_id=?',(SAVE,OP))
+                    if mode=='third-row':db.execute('INSERT INTO outbox SELECT * FROM outbox WHERE operation_id=?',(SAVE,))
+                    db.commit()
+                refresh_manifest(raw)
+                with self.assertRaises(RuntimeError):snapshots.project_recovery(raw,root/'working',stage='associated')
 
     def test_hidden_drafts_saves_foreign_transfer_and_relabelled_attempt_are_rejected(self):
         for mode in ('draft','save','frozen-Save-rewritten','foreign-job','extra-outbox','raw-error','relabelled-attempt','changed-commit-base'):
@@ -165,13 +206,15 @@ class ReleaseRecoveryChecks(unittest.TestCase):
                 with self.subTest(marker=field),self.assertRaises(RuntimeError):runtime.validate_unknown(before,after,p0,p1,ANDROID,control,dict(marker,**{field:value}))
             changed=deepcopy(p1);changed['delivery']['counts']['revision:200']=2
             with self.assertRaises(RuntimeError):runtime.validate_unknown(before,after,p0,changed,ANDROID,control,marker)
+            changed=deepcopy(after);changed['native']['outbox'][0]['operation_id']=CONTROL
+            with self.assertRaises(RuntimeError):runtime.validate_unknown(before,changed,p0,p1,ANDROID,control,marker)
 
     def test_reconcile_needs_changes_read_same_original_and_preserved_failed_attempt(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);before=projection(root/'before','unknown');after=projection(root/'after','reconciled')
             _,p0,_,_=providers();p1=deepcopy(p0);p1['delivery']['counts']['changes:200']+=1
             runtime.validate_reconciled(before,after,p0,p1,original_receipt())
-            for table,key,value in [('attempts','outcome','succeeded'),('attempts','attempts',2),('issuers','device_id','other'),('outbox','operation_id',CONTROL)]:
+            for table,key,value in [('attempts','outcome','succeeded'),('attempts','attempts',2),('issuers','device_id','other'),('outbox','operation_id',CONTROL),('outbox','state','pending')]:
                 changed=deepcopy(after);changed['native'][table][0][key]=value
                 with self.subTest(table=table,key=key),self.assertRaises(RuntimeError):runtime.validate_reconciled(before,changed,p0,p1,original_receipt())
             for mode in ('revision','object','upload','no-changes'):
