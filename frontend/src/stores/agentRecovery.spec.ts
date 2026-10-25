@@ -89,6 +89,43 @@ it('fills missing events through REST before reconnecting a live run', async () 
   expect(mock.stream.mock.calls.at(-1)![2]).toBe(2)
 })
 
+it.each(['completed', 'failed', 'cancelled'])('clears the connection error when REST recovers a %s run', async status => {
+  const store = useAgentStore()
+  await store.loadRun('r')
+  handler().onError(new Error('desktop SSE unavailable'))
+  expect(store.error).toBe('desktop SSE unavailable')
+  const name = status === 'completed' ? 'RunCompleted' : status === 'failed' ? 'RunFailed' : 'RunCancelled'
+  mock.trace.mockResolvedValueOnce({
+    run_id: 'r', status, items: [event(1, name)], next_sequence: 1, has_more: false,
+  })
+  mock.get.mockResolvedValueOnce({ run_id: 'r', status, error: status === 'failed' ? 'MODEL_UNAVAILABLE' : undefined })
+
+  await vi.advanceTimersByTimeAsync(1000)
+
+  expect(store.activeRun?.status).toBe(status)
+  expect(store.connectionState).toBe('idle')
+  expect(store.isRunning).toBe(false)
+  expect(store.error).toBeNull()
+  expect(store.activeRun?.error).toBe(status === 'failed' ? 'MODEL_UNAVAILABLE' : undefined)
+  expect(store.events.map(item => item.event)).toEqual([name])
+  await vi.advanceTimersByTimeAsync(40000)
+  expect(mock.stream).toHaveBeenCalledTimes(1)
+})
+
+it('keeps the latest recovery error when the run cannot be read', async () => {
+  const store = useAgentStore()
+  await store.loadRun('r')
+  handler().onError(new Error('desktop SSE unavailable'))
+  mock.get.mockRejectedValueOnce(new Error('run read unavailable'))
+
+  await vi.advanceTimersByTimeAsync(1000)
+
+  expect(store.connectionState).toBe('reconnecting')
+  expect(store.isRunning).toBe(true)
+  expect(store.error).toBe('run read unavailable')
+  expect(mock.stream).toHaveBeenCalledTimes(1)
+})
+
 it('drops a previously selected run when the current vault list does not contain it', async () => {
   const store = useAgentStore()
   await store.loadRun('legacy-run')

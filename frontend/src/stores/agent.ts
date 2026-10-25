@@ -229,6 +229,7 @@ export const useAgentStore = defineStore('agent', () => {
           if (terminal(run.status)) {
             isRunning.value = false
             connectionState.value = 'idle'
+            error.value = null
             return
           }
           subscribe(runId)
