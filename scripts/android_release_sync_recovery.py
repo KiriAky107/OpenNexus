@@ -19,6 +19,10 @@ from release_plan import atomic_json, digest
 PHASES = ('cycle-drop-original', 'cycle-reconcile-original')
 
 
+def exclusive_json(path, value):
+    exclusive(path, (json.dumps(value,ensure_ascii=False,separators=(',',':'))+'\n').encode('utf-8'))
+
+
 def validate_auth_provider(value, device, setup_device):
     expect_requests(value,2,0,0)
     account = provider_account(value,0)
@@ -133,15 +137,15 @@ class ReleaseSyncRecovery(ReleaseSync):
         validate_auth_provider(self.recovery_auth_provider,login['device_id'],prepared['device_id'])
         provider_before = self.sync_provider('associated')
         root = control_root(self.owner); current = read_json(root/'control.json'); operation = str(uuid.uuid4())
-        atomic_json(self.output/'recovery-drop-control-intent.json',dict(operation_id=operation,mode='drop_revision',
-            expected_revision=current['revision'],native_or_server_operation_id=False,automatic_retry=False),exclusive=True)
+        exclusive_json(self.output/'recovery-drop-control-intent.json',dict(operation_id=operation,mode='drop_revision',
+            expected_revision=current['revision'],native_or_server_operation_id=False,automatic_retry=False))
         control = arm_control(self.owner,operation,'drop_revision',current['revision'])
-        atomic_json(self.output/'recovery-drop-control-receipt.json',control,exclusive=True)
+        exclusive_json(self.output/'recovery-drop-control-receipt.json',control)
         self.phase('cycle-drop-original','recovery-original-dropped')
         unknown,source = self.recovery_snapshot('unknown','unknown'); provider_unknown = self.sync_provider('unknown')
         marker = read_json(root/'fault-events'/(operation+'.json'))
         receipt = validate_unknown(associated,unknown,provider_before,provider_unknown,login['device_id'],control,marker)
-        atomic_json(self.output/'recovery-original-dropped-response.json',marker,exclusive=True)
+        exclusive_json(self.output/'recovery-original-dropped-response.json',marker)
         self.preserve_auth('recovery-unknown-auth',auth,sealed)
         remote = read_original_object(setup.endpoint,prepared['vault']['vault_id'],receipt['hash'],setup.session()['access_token'])
         require(remote == body == source,'RELEASE_SYNC_RECOVERY_ORIGINAL_S3_BYTES')

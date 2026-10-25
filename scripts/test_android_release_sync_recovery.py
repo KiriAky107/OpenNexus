@@ -3,6 +3,7 @@ from contextlib import closing
 from copy import deepcopy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import sqlite3
 import tempfile
 from unittest.mock import Mock, patch
@@ -252,6 +253,86 @@ class OriginalDropContract(unittest.IsolatedAsyncioTestCase):
             marker=json.loads((root/'fault-events'/(CONTROL+'.json')).read_bytes())
             self.assertEqual(marker,providers()[3]);self.assertEqual(control,providers()[2])
             self.assertFalse(any(b'private-response-not-recorded' in f.read_bytes() for f in root.rglob('*.json')))
+
+
+class RecoveryRecordingChecks(unittest.TestCase):
+    def run_recording(self, root, *, duplicate=False, control_unknown=False):
+        subject=object.__new__(runtime.ReleaseSyncRecovery)
+        subject.owner=root/'owner';subject.owner.mkdir()
+        control_root=fixture.initialize_control(subject.owner);fixture.freeze_target(subject.owner,base.VAULT)
+        subject.output=root/'evidence';subject.output.mkdir()
+        subject.inputs=root/'inputs';subject.inputs.mkdir();(subject.inputs/'runtime-inputs.json').write_text('{}','utf-8')
+        subject.prepare=Mock();subject.enable_test_ime=Mock();subject.restore_test_ime=Mock();subject.stage_sync_input=Mock()
+        values={stage:projection(root/stage,stage) for stage in snapshots.STAGES}
+        association=values['associated']['native']['association'];binding=values['associated']['native']['binding']
+        login=dict(operation_id=association['auth_operation_id'],phase='active',kind='login',device_id=ANDROID,
+            endpoint=binding['endpoint'],account=binding['account'])
+        auth=dict(intents=[login],selection=dict(operation_id=login['operation_id']))
+        subject.snapshot=Mock(return_value=auth)
+        subject.observer=SimpleNamespace(ciphertext_fingerprints=Mock(return_value={}))
+        auth_provider=dict(users=[dict(devices=[dict(id=ANDROID),dict(id='b'*32)],
+            session_counts=[dict(device_id=ANDROID,sessions=1),dict(device_id='b'*32,sessions=1)]),dict(devices=[],session_counts=[])],
+            requests=dict(counts={'login:200':2}))
+        subject.observe=Mock(return_value=auth_provider)
+        subject.original_association=Mock(return_value={k:association[k] for k in ('operation_id','preview_fingerprint','remote_vault')})
+        subject.recovery_snapshot=Mock(side_effect=lambda label,stage:(values[stage],runtime.BODY.encode()))
+        p0,p1,control,marker=providers();p2=deepcopy(p1);p2['delivery']['counts']['changes:200']+=1
+        subject.sync_provider=Mock(side_effect=lambda label:dict(associated=p0,unknown=p1,**{'unknown-read':p1,'reconciled':p2,'cold':p2})[label])
+        subject.phases=[]
+        def phase(name,label):
+            subject.phases.append(dict(phase=name,pid=len(subject.phases)+1))
+            if name=='cycle-drop-original':
+                fixture.original.atomic_json(control_root/'fault-events'/(CONTROL+'.json'),marker,exclusive=True)
+        subject.phase=Mock(side_effect=phase)
+        subject.manifest=dict(successor=dict(source_commit='d118b2ba63c922142f9fadee8772b6ec15791f48'))
+        subject.identities=dict(successor=dict(source_commit=subject.manifest['successor']['source_commit']))
+        setup=Mock();setup.run.return_value=dict(vault=dict(vault_id=base.VAULT),device_id='b'*32,provider=p0)
+        setup.endpoint='https://owned.trycloudflare.com';setup.session.return_value=dict(access_token='fixture-not-a-session')
+        intent=subject.output/'recovery-drop-control-intent.json'
+        if duplicate:intent.write_bytes(b'original-intent-retained')
+        arm=fixture.arm_control
+        with patch.object(runtime.ReleaseUpgrade,'phase'),patch.object(runtime,'Setup',return_value=setup), \
+                patch.object(runtime,'uuid',SimpleNamespace(uuid4=lambda:CONTROL)), \
+                patch.object(runtime,'read_original_object',return_value=runtime.BODY.encode()) as read_object, \
+                patch.object(runtime,'arm_control',side_effect=TimeoutError() if control_unknown else arm) as armed, \
+                patch.dict(runtime.os.environ,dict(GITHUB_SHA='a'*40,GITHUB_RUN_ID='1234')):
+            if duplicate or control_unknown:
+                with self.assertRaises(FileExistsError if duplicate else TimeoutError):subject.run()
+                self.assertFalse((subject.output/'recovery-drop-control-receipt.json').exists())
+                self.assertFalse((subject.output/'recovery-original-dropped-response.json').exists())
+                self.assertFalse((subject.output/'sync-recovery-runtime-proof.json').exists())
+                self.assertEqual([v['phase'] for v in subject.phases],['login-a','associate'])
+                read_object.assert_not_called()
+                if duplicate:
+                    armed.assert_not_called();self.assertEqual(intent.read_bytes(),b'original-intent-retained')
+                else:
+                    armed.assert_called_once()
+                    self.assertEqual(json.loads(intent.read_bytes())['operation_id'],CONTROL)
+                return
+            result=subject.run()
+            armed.assert_called_once_with(subject.owner,CONTROL,'drop_revision',0)
+            self.assertTrue(result['passed'])
+            self.assertEqual(result['original_Save_id'],SAVE)
+            self.assertEqual(result['original_association_upload_id'],OP)
+            for name,expected in (
+                ('recovery-drop-control-intent.json',dict(operation_id=CONTROL,mode='drop_revision',expected_revision=0,native_or_server_operation_id=False,automatic_retry=False)),
+                ('recovery-drop-control-receipt.json',control),('recovery-original-dropped-response.json',marker)):
+                path=subject.output/name;self.assertEqual(json.loads(path.read_bytes()),expected);original=path.read_bytes()
+                # Re-enter each REAL record point with the same valid value.
+                with self.assertRaises(FileExistsError):runtime.exclusive_json(path,expected)
+                self.assertEqual(path.read_bytes(),original)
+            self.assertEqual([v['phase'] for v in subject.phases],
+                ['login-a','associate','cycle-drop-original','status','cycle-reconcile-original','status'])
+            self.assertEqual(json.loads((control_root/'control.json').read_bytes())['revision'],1)
+
+    def test_complete_controlled_orchestrator_calls_real_recorders_for_intent_receipt_and_marker(self):
+        with tempfile.TemporaryDirectory() as folder:self.run_recording(Path(folder))
+
+    def test_existing_original_control_intent_refuses_before_control_or_cycle_and_keeps_bytes(self):
+        with tempfile.TemporaryDirectory() as folder:self.run_recording(Path(folder),duplicate=True)
+
+    def test_unknown_original_control_preserves_intent_without_receipt_cycle_or_retry(self):
+        with tempfile.TemporaryDirectory() as folder:self.run_recording(Path(folder),control_unknown=True)
 
 
 if __name__ == '__main__':unittest.main()
