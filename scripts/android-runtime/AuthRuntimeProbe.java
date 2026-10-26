@@ -100,6 +100,8 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected long touchSettleMillis() { return 150; }
     protected boolean nativeAccessibilityClick(String name) { return false; }
     protected boolean hostedCycleTouch(String name) { return false; }
+    /** A dedicated lifecycle probe can close UI observation before owned process loss. */
+    protected boolean productUiObservationClosed() { return false; }
     protected void awaitHostedCycleTouch(Rect original,Rect hit,int window) {
         throw new IllegalStateException("No hosted cycle input policy");
     }
@@ -257,7 +259,7 @@ public class AuthRuntimeProbe extends Instrumentation {
         SystemClock.sleep(100);
     }
     private void clearPassword() {
-        if (ui==null) return;
+        if (ui==null || productUiObservationClosed()) return;
         try { for (AccessibilityNodeInfo node:nodes()) if (node.isEditable() && node.isPassword()) {
             Bundle empty=new Bundle();empty.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,"");
             node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,empty);
@@ -510,6 +512,7 @@ public class AuthRuntimeProbe extends Instrumentation {
         return result;
     }
     private String shape() {
+        if(productUiObservationClosed())return "product_UI_observation_closed=true raw_UI_recorded=false\n";
         StringBuilder value=new StringBuilder("redacted-auth-ui-shape\n");
         value.append("original_input ").append(inputTrace).append('\n');
         for(String previous:inputHistory)value.append("previous_original_input ").append(previous).append('\n');
