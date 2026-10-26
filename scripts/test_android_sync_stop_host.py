@@ -55,6 +55,8 @@ class Harness:
         self.partial=False;self.partial_reads=0;self.unknown_tap=False;self.unknown_signal=False;self.no_hold=False
         self.no_stopped=False;self.owner_changed=False;self.wrong_marker=False;self.stale=False;self.bad_ready=False;self.early_exit=False
         self.change_after_tap=False;self.unknown_release=False;self.bad_readback=False
+        self.pid_output=b'1234\n';self.uid_output=b'package:cc.kronecker.opennexus uid:12345\n'
+        self.pid_code=self.uid_code=0;self.pid_stderr=self.uid_stderr=b''
         out=self.root/'out';out.mkdir();tools=self.root/'tools';tools.mkdir()
         s=SimpleNamespace(output=out,tools=tools,owner=self.owner,args=SimpleNamespace(serial='emulator-5580'),adb=Path('not-executed-adb'),
             driver_entry=host.ENTRY,activity=host.APP+'/.MainActivity',identity={'api':'36','boot_id':P},phases=[],stop=Mock())
@@ -64,8 +66,8 @@ class Harness:
 
     def shell(self,*args,**kwargs):
         def result(raw,code=0):return SimpleNamespace(returncode=code,stdout=raw,stderr=b'')
-        if args==('pidof',host.APP):return result(b'1234\n')
-        if args==('pm','list','packages','-U',host.APP):return result(b'package:cc.kronecker.opennexus uid:12345\n')
+        if args==('pidof',host.APP):return SimpleNamespace(returncode=self.pid_code,stdout=self.pid_output,stderr=self.pid_stderr)
+        if args==('pm','list','packages','-U',host.APP):return SimpleNamespace(returncode=self.uid_code,stdout=self.uid_output,stderr=self.uid_stderr)
         if args==('cat','/proc/uptime'):return result(b'4.001 0.5\n' if self.stale else b'1.200 0.5\n')
         if args[:4]==('run-as',host.DRIVER,'sh','-c'):
             script=args[4];path=script.rsplit('cat ',1)[1]
@@ -139,6 +141,46 @@ class Harness:
 
 
 class StopHost(unittest.TestCase):
+    def test_pm_substring_listing_of_owned_driver_IME_and_product_selects_only_exact_product_UID(self):
+        with tempfile.TemporaryDirectory() as folder:
+            h=Harness(folder)
+            h.uid_output=b'package:cc.kronecker.opennexus.testdriver uid:12346\npackage:cc.kronecker.opennexus uid:12345\npackage:cc.kronecker.opennexus.testime uid:12347\n'
+            h.execute()
+            observed=read_json(h.subject.output/'original-preinstrument-owner.json')
+            self.assertEqual(observed['pid'],1234);self.assertEqual(observed['product_uid'],12345)
+            self.assertEqual(observed['listed_owned_packages'],3);self.assertFalse(observed['native_cycle_acknowledged'])
+            self.assertEqual((h.subject.output/'original-package-uid-query.stdout').read_bytes(),h.uid_output)
+            self.assertEqual(h.events,['launch','tap1','held-marker','first-finish','tap2','second-finish','release-CAS','final-finish'])
+
+    def test_preinstrument_bad_PID_UID_or_unknown_result_never_launches_driver_or_exports_unapproved_streams(self):
+        variants=('missing-product','duplicate-product','duplicate-uid','foreign-prefix','uid-control','bad-uid','too-many',
+                  'multi-pid','pid-stderr','uid-stderr','pid-returncode','uid-returncode','huge-output')
+        for mode in variants:
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as folder:
+                h=Harness(folder);private=b'private-unapproved-query-output'
+                if mode=='missing-product':h.uid_output=b'package:cc.kronecker.opennexus.testdriver uid:12346\n'
+                if mode=='duplicate-product':h.uid_output*=2
+                if mode=='duplicate-uid':h.uid_output+=b'package:cc.kronecker.opennexus.testdriver uid:12345\n'
+                if mode=='foreign-prefix':h.uid_output+=b'package:cc.kronecker.opennexus.foreign uid:12346\n'
+                if mode=='uid-control':h.uid_output+=b'\x00'+private
+                if mode=='bad-uid':h.uid_output=b'package:cc.kronecker.opennexus uid:01234\n'
+                if mode=='too-many':h.uid_output*=4
+                if mode=='multi-pid':h.pid_output=b'1234 4321\n'
+                if mode=='pid-stderr':h.pid_stderr=private
+                if mode=='uid-stderr':h.uid_stderr=private
+                if mode=='pid-returncode':h.pid_code=1
+                if mode=='uid-returncode':h.uid_code=1
+                if mode=='huge-output':h.uid_output=private*1000
+                with self.assertRaises(RuntimeError):h.execute()
+                self.assertIsNone(h.process);self.assertEqual(h.events,['launch']);self.assertFalse(h.signals)
+                self.assertFalse((h.subject.output/'original-instrument-intent.json').exists())
+                self.assertFalse((h.subject.output/'original-package-uid-query.stdout').exists())
+                failure=read_json(h.subject.output/'original-preinstrument-failure.json')
+                self.assertIn(failure['stage'],('product-pid','product-package-uid'));self.assertTrue(failure['instrumentation_not_started'])
+                exported=b''.join(f.read_bytes() for f in h.subject.output.iterdir() if f.is_file())
+                self.assertNotIn(private,exported);self.assertFalse(failure['automatic_retry'])
+        self.assertEqual(host.product_uid(b'package:cc.kronecker.opennexus uid:12345\r\n'),(12345,1))
+
     def test_closed_parent_ready_and_no_default_entry_scope_expansion(self):
         self.assertEqual(host.validate_parent(parent(),host.STOP),parent())
         self.assertEqual(host.validate_ready(ready(),parent(),'cycle-start',1200,12345),ready())

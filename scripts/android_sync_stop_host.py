@@ -5,6 +5,7 @@ used. Driver IDs, delivery markers and GUI facts never substitute for Native
 invocation, durable state or PG/S3 evidence. No input/CAS retry or fallback.
 """
 import json
+import hashlib
 from pathlib import Path
 import re
 import shlex
@@ -224,6 +225,58 @@ def _marker(path, token):
     return True if token in value else None
 
 
+def product_uid(raw):
+    # pm's positional package filter is a substring filter. Only the exact
+    # product and the two fixed owned test packages may appear in this query.
+    require(type(raw) is bytes and 0 < len(raw) <= 1024, 'SYNC_STOP_PACKAGE_UID_BOUND')
+    allowed = {APP, DRIVER, 'cc.kronecker.opennexus.testime'}; values = {}
+    lines = raw[:-1].split(b'\n') if raw.endswith(b'\n') else raw.split(b'\n')
+    require(1 <= len(lines) <= 3, 'SYNC_STOP_PACKAGE_UID_ROWS')
+    for line in lines:
+        match = re.fullmatch(rb'package:([a-z0-9.]+) uid:([0-9]{5})\r?', line)
+        require(match is not None, 'SYNC_STOP_PACKAGE_UID_LINE')
+        package, uid = match[1].decode('ascii'), int(match[2])
+        require(package in allowed and package not in values and 10000 <= uid < 100000 and uid not in values.values(),
+                'SYNC_STOP_PACKAGE_UID_OWNER_OR_DUPLICATE')
+        values[package] = uid
+    require(APP in values, 'SYNC_STOP_EXACT_PRODUCT_UID_MISSING')
+    return values[APP], len(values)
+
+
+def preinstrument_owner(subject, label):
+    stage = 'product-pid'
+    def query(name, args):
+        try: result = subject.shell(*args, check=False)
+        except Exception as error:
+            record(subject.output/(label+'-'+name+'-query-result.json'),dict(arguments=list(args),returncode=None,
+                unknown_result=True,error_type=type(error).__name__,automatic_retry=False))
+            raise
+        record(subject.output/(label+'-'+name+'-query-result.json'),dict(arguments=list(args),returncode=result.returncode,
+            stdout_bytes=len(result.stdout),stdout_sha256=hashlib.sha256(result.stdout).hexdigest(),
+            stderr_bytes=len(result.stderr),stderr_sha256=hashlib.sha256(result.stderr).hexdigest(),
+            unvalidated_streams_exported=False,automatic_retry=False))
+        require(type(result.returncode) is int and result.returncode == 0 and len(result.stdout) <= 4096 and result.stderr == b'',
+                'SYNC_STOP_PREINSTRUMENT_QUERY_UNKNOWN')
+        return result.stdout
+    try:
+        raw = query('product-pid',('pidof',APP))
+        match = re.fullmatch(rb'([1-9][0-9]{0,9})\r?\n?',raw)
+        require(match is not None,'SYNC_STOP_ORIGINAL_PID')
+        pid = match[1]; exclusive(subject.output/(label+'-product-pid-query.stdout'),raw)
+        stage = 'product-package-uid'
+        raw = query('package-uid',('pm','list','packages','-U',APP))
+        uid, count = product_uid(raw)
+        exclusive(subject.output/(label+'-package-uid-query.stdout'),raw)
+        record(subject.output/(label+'-preinstrument-owner.json'),dict(package=APP,pid=int(pid),product_uid=uid,
+            listed_owned_packages=count,closed_PID_UID_stdout_retained=True,
+            live_foreground_boot_window_and_UID_still_required_by_instrumentation_guard=True,native_cycle_acknowledged=False))
+        return pid, uid
+    except Exception as error:
+        record(subject.output/(label+'-preinstrument-failure.json'),dict(stage=stage,error_type=type(error).__name__,
+            automatic_retry=False,instrumentation_not_started=True,native_cycle_acknowledged=False))
+        raise
+
+
 def run_hosted_stop_cycle(subject, phase, label, *, held=None):
     require(subject.driver_entry == ENTRY and phase in (STOP, RESUME)
             and re.fullmatch(r'[a-z][a-z0-9-]{0,47}', label)
@@ -243,10 +296,7 @@ def run_hosted_stop_cycle(subject, phase, label, *, held=None):
     out_path, err_path = private/'stdout', private/'stderr'
     subject.stop()
     subject.original_command(label+'-launch', ('shell', '-T', shlex.join(('am', 'start', '-W', '-n', subject.activity))))
-    pid = subject.shell('pidof', APP).stdout.strip(); require(re.fullmatch(rb'[1-9][0-9]{0,9}', pid), 'SYNC_STOP_ORIGINAL_PID')
-    uid_raw = subject.shell('pm', 'list', 'packages', '-U', APP).stdout
-    match = re.fullmatch(rb'package:cc\.kronecker\.opennexus uid:([0-9]{5})\r?\n?', uid_raw)
-    require(match is not None, 'SYNC_STOP_INSTALLED_UID'); uid = int(match[1])
+    pid, uid = preinstrument_owner(subject,label)
     args = ('shell', '-T', shlex.join(('am', 'instrument', '-w', '-e', 'phase', phase, DRIVER+'/.'+ENTRY)))
     record(subject.output/(label+'-instrument-intent.json'), dict(arguments=list(args), automatic_retry=False))
     complete = False; process = None; stage = 'launch-instrumentation'; parent = None; inputs = []
