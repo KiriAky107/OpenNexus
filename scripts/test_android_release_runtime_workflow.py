@@ -33,7 +33,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
     def test_media_scene_uses_only_successor_script_and_unknown_scene_is_rejected_before_read(self):
         caller=yaml.load((ROOT/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
         option=caller['on']['workflow_dispatch']['inputs']['release_runtime_scene']
-        self.assertEqual(option['options'],['upgrade','media','auth','auth-recovery','auth-background','auth-certificate','sync','sync-read','sync-image','sync-mutations','sync-recovery','sync-stop']);self.assertEqual(option['default'],'upgrade')
+        self.assertEqual(option['options'],['upgrade','media','auth','auth-recovery','auth-background','auth-certificate','sync','sync-read','sync-image','sync-mutations','sync-recovery','sync-stop','sync-process']);self.assertEqual(option['default'],'upgrade')
         self.assertLessEqual(len(caller['on']['workflow_dispatch']['inputs']),25)
         flow=self.flow();self.assertEqual(flow['on']['workflow_call']['inputs']['scene']['default'],'upgrade')
         steps=flow['jobs']['release-upgrade']['steps']
@@ -64,7 +64,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
     def test_auth_origin_is_fixed_and_private_provider_paths_are_never_uploaded(self):
         runtime=self.flow()['jobs']['release-upgrade'];steps=runtime['steps']
         checkout=next(s for s in steps if s.get('with',{}).get('repository')=='KiriAky107/Sync-for-OpenNexus')
-        self.assertEqual(checkout['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery' || inputs.scene == 'sync-stop'")
+        self.assertEqual(checkout['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery' || inputs.scene == 'sync-stop' || inputs.scene == 'sync-process'")
         self.assertEqual(checkout['with']['ref'],'29e2e6d373ea752352981bdad05d34a7a0d9c3d9')
         self.assertEqual(checkout['with']['persist-credentials'],'false')
         auth=next(s for s in steps if 'android_release_auth.py' in s.get('run',''))
@@ -72,7 +72,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         prepare=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
         self.assertIn('uv sync --frozen',prepare['run']);self.assertNotIn('GITHUB_TOKEN',str(prepare))
         cleanup=next(s for s in steps if s.get('name')=='Stop only the original owned HTTPS auth origin')
-        self.assertEqual(cleanup['if'],"always() && (inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery' || inputs.scene == 'sync-stop')")
+        self.assertEqual(cleanup['if'],"always() && (inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery' || inputs.scene == 'sync-stop' || inputs.scene == 'sync-process')")
         upload=next(s for s in steps if s.get('uses')=='actions/upload-artifact@v7')['with']['path']
         self.assertNotIn('owned-auth-',upload);self.assertNotIn('driver-build',upload);self.assertNotIn('android-auth-source',upload)
         self.assertIn('origin-proof/',upload)
@@ -83,7 +83,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         self.assertEqual(recovery['if'],"inputs.scene == 'auth-recovery'")
         self.assertNotIn('android_release_auth.py ',recovery['run'])
         origin=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
-        self.assertEqual(origin['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery' || inputs.scene == 'sync-stop'")
+        self.assertEqual(origin['if'],"inputs.scene == 'auth' || inputs.scene == 'auth-recovery' || inputs.scene == 'auth-background' || inputs.scene == 'auth-certificate' || inputs.scene == 'sync' || inputs.scene == 'sync-read' || inputs.scene == 'sync-image' || inputs.scene == 'sync-mutations' || inputs.scene == 'sync-recovery' || inputs.scene == 'sync-stop' || inputs.scene == 'sync-process'")
         self.assertLess(steps.index(recovery),next(i for i,s in enumerate(steps) if s.get('name')=='Stop only the original owned HTTPS auth origin'))
         self.assertTrue(all('unused' not in s.get('name','').lower() for s in steps))
 
@@ -115,7 +115,7 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
         self.assertNotIn('android_sync_runtime.py',sync['run'])
         origin=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
         self.assertEqual(origin['env']['RUNTIME_SCENE'],'${{ inputs.scene }}')
-        self.assertIn('if [[ "$RUNTIME_SCENE" == sync || "$RUNTIME_SCENE" == sync-read || "$RUNTIME_SCENE" == sync-image || "$RUNTIME_SCENE" == sync-mutations || "$RUNTIME_SCENE" == sync-recovery || "$RUNTIME_SCENE" == sync-stop ]]',origin['run'])
+        self.assertIn('if [[ "$RUNTIME_SCENE" == sync || "$RUNTIME_SCENE" == sync-read || "$RUNTIME_SCENE" == sync-image || "$RUNTIME_SCENE" == sync-mutations || "$RUNTIME_SCENE" == sync-recovery || "$RUNTIME_SCENE" == sync-stop || "$RUNTIME_SCENE" == sync-process ]]',origin['run'])
         self.assertIn('prepare --fixture sync',origin['run'])
         self.assertIn("inputs.scene == 'sync' && 'sync'",str(steps[-1]['with']['name']))
 
@@ -216,6 +216,26 @@ class ReleaseRuntimeWorkflow(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'fixed service admission reached'):origin.prepare()
                 identity.assert_called_once();process.assert_not_called();container.assert_not_called()
                 self.assertTrue((private/'home').is_dir());self.assertFalse((private/'owner-state.json').exists())
+
+    def test_process_scene_selects_dedicated_CLI_fixed_origin_and_only_approved_hidden_originals(self):
+        flow=self.flow();steps=flow['jobs']['release-upgrade']['steps']
+        actions=[s for s in steps if 'scripts/android_release_sync_process.py' in s.get('run','')]
+        self.assertEqual(len(actions),1);action=actions[0]
+        self.assertEqual(action['if'],"inputs.scene == 'sync-process'")
+        args=shlex.split(action['run'])
+        self.assertEqual(args[:2],['.build/android-auth-source/.venv/bin/python','scripts/android_release_sync_process.py'])
+        self.assertEqual(args[2:],['--inputs','.build/android-release-runtime/inputs','--sdk','$ANDROID_HOME',
+            '--java','$JAVA_HOME/bin/java','--output','.build/android-release-runtime/evidence'])
+        origin=next(s for s in steps if s.get('name')=='Prepare only the fixed independent HTTPS auth origin')
+        emulator=next(s for s in steps if s.get('name')=='Prepare only this hosted emulator')
+        self.assertIn("inputs.scene == 'sync-process'",origin['if'])
+        self.assertIn('"$RUNTIME_SCENE" == sync-process',origin['run'])
+        self.assertLess(steps.index(origin),steps.index(emulator));self.assertLess(steps.index(emulator),steps.index(action))
+        self.assertIn("inputs.scene == 'sync-process' && 'release-sync-process'",flow['jobs']['release-upgrade']['name'])
+        upload=steps[-1]['with'];self.assertIn("inputs.scene == 'sync-process' && 'sync-process'",upload['name'])
+        self.assertEqual(upload['include-hidden-files'],'true')
+        self.assertNotIn('driver-build',upload['path']);self.assertNotIn('private-auth',upload['path'])
+        self.assertNotIn('owned-auth-',upload['path']);self.assertNotIn('inputs/',upload['path'])
 
     def test_actual_admission_gate_rejects_branch_mismatch_dirty_source_or_unfrozen_pointer(self):
         steps=self.flow()['jobs']['fetch-inputs']['steps'];gate=next(s['run'] for s in steps if s.get('name','').startswith('Admit fixed'))
