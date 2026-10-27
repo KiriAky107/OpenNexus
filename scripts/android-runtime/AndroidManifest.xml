@@ -32,6 +32,7 @@
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseSyncRecoveryRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseSyncStopRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseSyncProcessRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
+    <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseSyncTimeoutRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseSyncReadRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.ReleaseSyncImageRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
 </manifest>
