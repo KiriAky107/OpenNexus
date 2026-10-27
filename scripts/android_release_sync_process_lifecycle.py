@@ -177,7 +177,14 @@ def main(probe_type, argv=None):
     for name in ('inputs','sdk','java','output'): parser.add_argument('--'+name,type=Path,required=True)
     args = parser.parse_args(argv); probe = None
     try:
-        probe = probe_type(args.inputs,args.sdk,args.java,args.output)
+        # The workflow supplies a workspace-relative output. Freeze that exact
+        # location before the real constructor derives its private tools path;
+        # do not resolve aliases into an apparently admissible directory.
+        require('..' not in args.output.parts, 'SYNC_PROCESS_CLI_OUTPUT_ALIAS')
+        output = args.output.absolute()
+        require(output.resolve() == output and all(not p.is_symlink() for p in (output,*output.parents)),
+                'SYNC_PROCESS_CLI_OUTPUT_ALIAS')
+        probe = probe_type(args.inputs,args.sdk,args.java,output)
         result = probe.run()
         require(result['passed'] is True and result['physical_phone_verified'] is False and result['published'] is False,
                 'SYNC_PROCESS_CLI_RESULT')
