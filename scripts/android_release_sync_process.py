@@ -5,7 +5,7 @@ from android_auth_runtime import active_intent
 from android_release_observation import APP,exclusive
 from android_release_sync import ReleaseSync,validate_association,read_original_object
 from android_release_sync_recovery import validate_auth_provider
-from android_release_sync_process_lifecycle import collect_original,main,run_guarded
+from android_release_sync_process_lifecycle import collect_original,main,run_guarded,stop_completed_read
 from android_release_sync_process_snapshot import NOTE,preserve_initial_outbox,preserve_read
 from android_release_sync_process_validation import validate_killed,validate_lifecycle,validate_open_read,validate_reconciled
 from android_release_upgrade import ReleaseUpgrade
@@ -109,6 +109,7 @@ class ReleaseSyncProcess(ReleaseSync):
             original_hold_operation_id=hold['operation_id'],original_lifecycle_id=lifecycle['original_lifecycle_id'],phase=RESUME,
             raw_killed_and_new_PID_read_checked=True,automatic_retry=False))
         self.phase(RESUME,'process-original-reconciled')
+        stop_completed_read(self)
         reconciled,source=collect_original(self,'reconciled',stage='reconciled');provider_after=self.sync_provider('reconciled')
         validate_reconciled(opened,reconciled,provider_killed,provider_after,receipt)
         require(source==body,'RELEASE_SYNC_PROCESS_RECONCILE_CHANGED_BYTES')

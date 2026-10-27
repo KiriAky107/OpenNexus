@@ -3,6 +3,8 @@ from copy import deepcopy
 import hashlib
 import json
 import os
+import shlex
+from subprocess import CompletedProcess
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -14,6 +16,7 @@ import android_release_sync_process_lifecycle as policy
 import android_sync_process_cleanup as cleanup
 import android_sync_stop_host as held_host
 import android_sync_fixture as fixture
+import android_sync_process_host as process_host
 import test_android_release_sync_process_snapshot as base
 from test_android_release_observation import Device,ROOT
 
@@ -55,7 +58,28 @@ class ProcessOrchestrator(unittest.TestCase):
         subject.inputs=root/'inputs';subject.inputs.mkdir();(subject.inputs/'runtime-inputs.json').write_bytes(b'{}')
         subject.args=SimpleNamespace(serial='emulator-5562');subject.identity=deepcopy(base.IDENTITY)
         subject.device=Device();subject.device.rooted=True;subject.device.identity=deepcopy(base.IDENTITY)
-        timeline=[];cas=[];originals=[]
+        timeline=[];cas=[];originals=[];read_pid=None
+        original_device=subject.device
+        def device(*args,**kwargs):
+            tokens=shlex.split(args[2]) if args[:2]==('shell','-T') else []
+            if tokens==['am','force-stop','--user','0',runtime.APP]:
+                self.assertEqual(kwargs['timeout'],2);self.assertTrue(subject.process_raw_killed_preserved)
+                self.assertEqual(subject.phases[-1]['phase'],runtime.RESUME)
+                self.assertTrue((subject.output/'process-completed-read-snapshot-stop-intent.json').is_file())
+                timeline.append('explicit-completed-read-snapshot-stop')
+                original_device.active=False;original_device.stopped=True
+                return CompletedProcess(args,0,b'',b'')
+            out=None
+            if tokens==['id','-u']:out=b'0\n'
+            elif tokens==['pidof',runtime.APP]:out=(str(read_pid)+'\n').encode()
+            elif tokens==['cat','/proc/'+str(read_pid)+'/stat']:
+                out=(str(read_pid)+' (opennexus) '+' '.join(['0']*19+['5678'])+'\n').encode()
+            elif tokens==['cat','/proc/'+str(read_pid)+'/cmdline']:out=runtime.APP.encode()+b'\0'
+            elif tokens==['cat','/proc/'+str(read_pid)+'/status']:
+                out=('Tgid:\t'+str(read_pid)+'\nUid:\t12345\t12345\t12345\t12345\n').encode()
+            return CompletedProcess(args,0,out,b'') if out is not None else original_device(*args,**kwargs)
+        subject.device=device
+        subject.shell=lambda *args,**kwargs:device('shell','-T',shlex.join(args),**kwargs)
         subject.stop=Mock(side_effect=AssertionError('implicit process stop forbidden'))
         subject.failure_observations=Mock(side_effect=AssertionError('ordinary failure hook forbidden'))
         subject.prepare=Mock(side_effect=lambda:timeline.append('normal-zero-device-prepare'))
@@ -68,7 +92,8 @@ class ProcessOrchestrator(unittest.TestCase):
             return deepcopy(auth)
         subject.snapshot=Mock(side_effect=snapshot)
         sealed={'no_backup/sync-credentials/owned/owned.bin':dict(bytes=32,sha256='d'*64)}
-        subject.observer=SimpleNamespace(identity=deepcopy(base.IDENTITY),ciphertext_fingerprints=Mock(return_value=sealed))
+        subject.observer=SimpleNamespace(identity=deepcopy(base.IDENTITY),observe_identity=Mock(return_value=deepcopy(base.IDENTITY)),
+            ciphertext_fingerprints=Mock(return_value=sealed))
         auth_provider=dict(users=[dict(devices=[dict(id=base.DEVICE),dict(id='b'*32)],
             session_counts=[dict(device_id=base.DEVICE,sessions=1),dict(device_id='b'*32,sessions=1)]),dict(devices=[],session_counts=[])],requests=dict(counts={'login:200':2}))
         def observe(label):
@@ -97,11 +122,12 @@ class ProcessOrchestrator(unittest.TestCase):
             if mode=='unknown-release' and kind=='release':raise TimeoutError('private original release result')
             return result
         def phase(name,label):
+            nonlocal read_pid
             timeline.append(name);pid=4242+len(subject.phases)
             if name==runtime.LOSS:
                 holder=subject.process_control.held;fixture.original.atomic_json(control/'fault-events'/(base.HOLD+'.json'),marker,exclusive=True)
                 holder.read_held()
-                if mode=='unknown-kill':subject.device.active=True;raise TimeoutError('private unknown lifecycle command')
+                if mode=='unknown-kill':original_device.active=True;raise TimeoutError('private unknown lifecycle command')
                 holder.begin_release(subject.output,cleanup.LABEL)
                 entry=lifecycle_files(subject,label,pid)
                 if mode=='bad-lifecycle':
@@ -109,22 +135,36 @@ class ProcessOrchestrator(unittest.TestCase):
                     path.write_text(json.dumps(value),'utf-8')
                 subject.phases.append(entry);return
             if mode=='same-read-PID' and label=='process-killed-read':pid=subject.phases[-1]['pid']
+            if name==runtime.RESUME:
+                read_pid=pid;original_device.active=True;original_device.stopped=False
+                parent=dict(schema=1,phase=runtime.RESUME,parent_intent_id=PARENT,input_intent_id=INPUT,native_invocation_id_observed=False)
+                for suffix,value in (('original-parent',parent),('original-lifetime',dict(package=runtime.APP,pid=pid,uid=12345,start_ticks=5678)),
+                    ('instrument-result',dict(returncode=0,unknown_result=False,automatic_retry=False,early_cleanup_not_success=False,no_final_product_force_stop_or_reopen=True))):
+                    runtime.record(subject.output/(label+'-'+suffix+'.json'),value)
+                stdout=b'\n'.join((process_host.READ,('OPENNEXUS_SYNC_PROCESS_INPUT_SUMMARY '+process_host.SUMMARY.format(loss='false',released='false')).encode(),
+                    ('OPENNEXUS_RELEASE_SYNC_PROCESS_PHASE_OK '+runtime.RESUME).encode()))+b'\n'
+                (subject.output/(label+'-instrument.stdout')).write_bytes(stdout)
+                subject.phases.append(dict(phase=name,label=label,pid=pid,passed=True,original_parent_intent_id=PARENT,
+                    original_input_intent_id=INPUT,actual_process_absence_observed=False,same_live_instrumentation_through_original_release=False,
+                    Native_RAM_invocation_id_observed=False,native_original_state_verified=False,client_receipt_known=False))
+                return
             subject.phases.append(dict(phase=name,label=label,pid=pid,passed=True))
         subject.phase=Mock(side_effect=phase)
         def collect(value,label,*,stage):
             if label=='killed':self.assertEqual(timeline[-1],runtime.LOSS);timeline.append('raw-killed')
             path=root/('fixture-'+stage);path.mkdir();raw,_=base.original_fixture(path,stage,outcome='interrupted' if mode=='already-interrupted' else 'running')
             before=base.retained(raw);originals.append((raw,before))
-            subject.device.files={ROOT+p.relative_to(raw).as_posix():p.read_bytes() for p in raw.rglob('*') if p.is_file() and p.name!='snapshot.json'}
+            original_device.files={ROOT+p.relative_to(raw).as_posix():p.read_bytes() for p in raw.rglob('*') if p.is_file() and p.name!='snapshot.json'}
             return policy.collect_original(value,label,stage=stage)
         with patch.object(runtime.ReleaseUpgrade,'phase',side_effect=lambda *args:timeline.append('one-new-GUI-Save')) as save, \
              patch.object(runtime,'Setup',return_value=setup),patch.object(runtime,'collect_original',side_effect=collect), \
              patch.object(cleanup,'uuid',SimpleNamespace(uuid4=lambda:base.HOLD)),patch.object(cleanup,'arm_control',side_effect=arm), \
              patch.object(held_host,'uuid',SimpleNamespace(uuid4=lambda:base.RELEASE)),patch.object(held_host,'arm_control',side_effect=arm), \
              patch.object(runtime,'read_original_object',return_value=b'wrong' if mode=='bad-S3' else runtime.BODY.encode()) as read_object, \
+             patch.object(process_host.ReleaseAuthBackground,'app_is_resumed',side_effect=lambda value:original_device.active), \
              patch.dict(os.environ,dict(GITHUB_ACTIONS='true',RUNNER_ENVIRONMENT='github-hosted',GITHUB_RUN_ID='17',GITHUB_RUN_ATTEMPT='1',GITHUB_SHA='c'*40)), \
              patch('android_runtime_probe.sys.platform','linux'):
-            if mode in ('complete','already-interrupted'):result=subject.run()
+            if mode in ('complete','already-interrupted','live-read'):result=subject.run()
             else:
                 with self.assertRaises((RuntimeError,TimeoutError)):subject.run()
                 result=None
@@ -135,6 +175,7 @@ class ProcessOrchestrator(unittest.TestCase):
         artifacts=b'\n'.join(p.read_bytes() for p in subject.output.rglob('*') if p.is_file())
         self.assertNotIn(b'private-GET-token',artifacts);self.assertNotIn(b'private unknown',artifacts);self.assertNotIn(b'private original',artifacts)
         if result:
+            self.assertEqual(timeline.count('explicit-completed-read-snapshot-stop'),1)
             self.assertTrue(result['passed']);self.assertFalse(result['Native_RAM_invocation_id_observed']);self.assertFalse(result['whole_Sync_A4_complete'])
             self.assertEqual(result['original_Save_id'],base.SAVE);self.assertEqual(result['original_association_upload_id'],base.UPLOAD)
             self.assertEqual(result['original_open_transition']['from_outcome'],'interrupted' if mode=='already-interrupted' else 'running')
@@ -150,6 +191,9 @@ class ProcessOrchestrator(unittest.TestCase):
 
     def test_actual_run_preserves_raw_running_before_open_then_same_record_reconcile_and_cold(self):
         with tempfile.TemporaryDirectory() as folder:self.exercise(Path(folder))
+
+    def test_completed_read_leaves_live_product_until_explicit_snapshot_stop(self):
+        with tempfile.TemporaryDirectory() as folder:self.exercise(Path(folder),'live-read')
 
     def test_actual_run_preserves_raw_already_interrupted_without_relabelling_or_second_attempt(self):
         with tempfile.TemporaryDirectory() as folder:self.exercise(Path(folder),'already-interrupted')

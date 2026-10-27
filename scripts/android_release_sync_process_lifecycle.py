@@ -8,6 +8,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
+from types import SimpleNamespace
 
 from android_release_observation import APP, DATABASES, StoppedReleaseObserver, exclusive
 from android_release_sync_process_snapshot import NOTE, STAGES, project_process
@@ -115,6 +117,81 @@ def collect_original(subject, label, *, stage=None):
     value = project_process(public,tools/('process-working-'+label),stage=stage)
     record(output/(label+'-content-projection.json'),value)
     return value,(public/'vault'/NOTE).read_bytes()
+
+
+def stop_completed_read(subject):
+    """One explicit snapshot stop after the original read driver completed.
+
+    This is separate from the tested process loss. The raw killed collector and
+    every failure/finally path remain read only and never call this function.
+    """
+    from android_release_upgrade import ReleaseUpgrade
+    from android_sync_process_host import RESUME,validate_parent,process_lifetime,_query,_reads,_approved_stdout,ReleaseAuthBackground
+    require(subject.process_raw_killed_preserved is True
+        and subject.process_stage=='explicit-original-changes-reconcile' and subject.phases,
+        'SYNC_PROCESS_READ_STOP_SEQUENCE')
+    phase=subject.phases[-1];label='process-original-reconciled'
+    output=exact_directory(subject.output);tools=exact_directory(subject.tools)
+    require(not tools.is_relative_to(output) and not output.is_relative_to(tools), 'SYNC_PROCESS_READ_STOP_PRIVATE_PATH')
+    def original(suffix):
+        path=output/(label+'-'+suffix+'.json')
+        require(path.is_file() and not path.is_symlink() and 0<path.stat().st_size<=4096, 'SYNC_PROCESS_READ_STOP_ORIGINAL_RECORD')
+        return closed_json(path.read_bytes())
+    parent=validate_parent(original('original-parent'),RESUME);lifetime=original('original-lifetime')
+    require(type(lifetime) is dict and set(lifetime)=={'package','pid','uid','start_ticks'} and lifetime['package']==APP
+        and type(lifetime['pid']) is int and 0<lifetime['pid']<2**31
+        and type(lifetime['uid']) is int and 10000<=lifetime['uid']<100000
+        and type(lifetime['start_ticks']) is int and 0<lifetime['start_ticks']<2**64, 'SYNC_PROCESS_READ_STOP_LIFETIME')
+    expected=dict(phase=RESUME,label=label,pid=lifetime['pid'],passed=True,
+        original_parent_intent_id=parent['parent_intent_id'],original_input_intent_id=parent['input_intent_id'],
+        actual_process_absence_observed=False,same_live_instrumentation_through_original_release=False,
+        Native_RAM_invocation_id_observed=False,native_original_state_verified=False,client_receipt_known=False)
+    require(type(phase) is dict and set(phase)==set(expected) and same_fields(phase,expected)
+        and same_fields(original('instrument-result'),dict(returncode=0,unknown_result=False,automatic_retry=False,
+            early_cleanup_not_success=False,no_final_product_force_stop_or_reopen=True)), 'SYNC_PROCESS_READ_STOP_DRIVER_NOT_COMPLETE')
+    path=output/(label+'-instrument.stdout')
+    require(path.is_file() and not path.is_symlink() and 0<path.stat().st_size<=4096,'SYNC_PROCESS_READ_STOP_STATIC_RESULT')
+    _approved_stdout(path.read_bytes(),RESUME)
+    pid=str(lifetime['pid']).encode();uid=lifetime['uid']
+    def owner():
+        require(_reads(subject).observer.observe_identity()==subject.identity
+            and _query(subject,('id','-u'),16)==b'0\n'
+            and _query(subject,('pidof',APP),64).strip()==pid
+            and ReleaseAuthBackground.app_is_resumed(_reads(subject))
+            and process_lifetime(subject,pid,uid)==lifetime,'SYNC_PROCESS_READ_STOP_OWNER_CHANGED')
+    private=tools/'process-completed-read-snapshot-stop';private.mkdir(exist_ok=False)
+    owner()
+    command=('shell','-T',shlex.join(('am','force-stop','--user','0',APP)))
+    record(output/'process-completed-read-snapshot-stop-intent.json',dict(arguments=list(command),
+        original_parent_intent_id=parent['parent_intent_id'],original_input_intent_id=parent['input_intent_id'],
+        original_lifetime=lifetime,owned_boot=subject.identity,original_read_driver_completed=True,
+        raw_killed_originals_already_preserved=True,snapshot_stop_is_not_tested_process_loss=True,automatic_retry=False))
+    owner()
+    recorder=SimpleNamespace(output=private,device=subject.device)
+    try:
+        result=ReleaseUpgrade.original_command(recorder,'once-snapshot-stop',command,timeout=2)
+        require(type(result.returncode) is int and result.returncode==0
+            and type(result.stdout) is bytes and result.stdout==b''
+            and type(result.stderr) is bytes and result.stderr==b'','SYNC_PROCESS_READ_STOP_UNAPPROVED_STREAM')
+    finally:
+        path=private/'once-snapshot-stop-result.json'
+        result=closed_json(path.read_bytes()) if path.exists() else None
+        facts=dict(returncode=None if result is None else result['returncode'],
+            unknown_result=result is None or result.get('unknown_result',False),automatic_retry=False,
+            unvalidated_streams_exported=False,snapshot_stop_is_not_tested_process_loss=True)
+        for stream in ('stdout','stderr'):
+            path=private/('once-snapshot-stop.'+stream)
+            if path.exists():
+                data=path.read_bytes();facts[stream+'_bytes']=len(data);facts[stream+'_sha256']=hashlib.sha256(data).hexdigest()
+        record(output/'process-completed-read-snapshot-stop-result.json',facts)
+    reads=_reads(subject)
+    observer=StoppedReleaseObserver(reads.observer.device,subject.args.serial,private/'stopped-check',[NOTE])
+    observer.identity=subject.identity;observer.require_stopped()
+    require(observer.observe_identity()==subject.identity and _query(subject,('id','-u'),16)==b'0\n',
+        'SYNC_PROCESS_READ_STOP_FINAL_OWNER_CHANGED')
+    record(output/'process-completed-read-snapshot-stop-confirmed.json',dict(original_read_driver_completed=True,
+        same_owned_root_boot=True,original_app_and_services_absent=True,user0_force_stopped=True,
+        snapshot_stop_is_not_tested_process_loss=True,native_apply_ACK=False,automatic_retry=False))
 
 
 def freeze_failure(subject, error):
