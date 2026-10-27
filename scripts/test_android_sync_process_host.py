@@ -408,4 +408,43 @@ class ProcessHost(unittest.TestCase):
                 self.assertNotIn(b'private-signal-stderr',raw)
 
 
+class StaticBoundaryAdmission(unittest.TestCase):
+    def test_local_static_marker_budget_does_not_repeat_expensive_ADB_owner_roundtrips(self):
+        with tempfile.TemporaryDirectory() as folder:
+            h=Harness(folder);owner=host._owner
+            def measured_owner(*args):
+                owner(*args)
+                h.now+=.30  # Controlled latency, not a measurement of Android.
+            with patch.object(host,'_owner',side_effect=measured_owner):h.execute()
+            self.assertEqual(h.events.count('tap'),1);self.assertEqual(h.events.count('force-stop'),1)
+            self.assertEqual(h.events.count('release-CAS'),1);self.assertEqual(h.subject.stop.call_count,1)
+
+    def test_owner_change_after_static_marker_still_refuses_before_lifecycle_intent_or_kill(self):
+        with tempfile.TemporaryDirectory() as folder:
+            h=Harness(folder);marker=host._marker
+            def changed(path,token):
+                result=marker(path,token)
+                if result is not None:h.variant='foreign-cmdline'
+                return result
+            with patch.object(host,'_marker',side_effect=changed),self.assertRaises(RuntimeError):h.execute()
+            self.assertNotIn('force-stop',h.events);self.assertNotIn('release-CAS',h.events)
+            self.assertFalse((h.subject.output/'original-lifecycle-intent.json').exists())
+            self.assertEqual(h.subject.stop.call_count,1)
+
+    def test_static_boundary_driver_exit_or_late_local_read_still_rejects(self):
+        for mode in ('driver-exit','late-local-read'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as folder:
+                clock=[100.];process=SimpleNamespace(returncode=None)
+                process.poll=lambda:process.returncode
+                def marker(path,token):
+                    self.assertEqual(token,host.BOUNDARY)
+                    if mode=='driver-exit':process.returncode=0
+                    else:clock[0]+=.501
+                    return True
+                with patch.object(host.time,'monotonic',side_effect=lambda:clock[0]),patch.object(host,'_marker',side_effect=marker), \
+                     patch.object(host,'_owner') as owner,patch.object(host,'_query') as query:
+                    with self.assertRaises(RuntimeError):host._wait_boundary(process,Path(folder)/'stdout',100.5)
+                    owner.assert_not_called();query.assert_not_called()
+
+
 if __name__=='__main__':unittest.main()

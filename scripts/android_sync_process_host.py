@@ -168,6 +168,15 @@ def _marker(path,token):
     return True if token in raw else None
 
 
+def _wait_boundary(process,path,deadline):
+    # This half-second budget observes a private local static stream only.
+    # Full original owner/lifetime and fresh loss-ready checks still run on
+    # both sides of the exclusive lifecycle intent in _terminate_original.
+    def driver_alive():
+        require(process.poll() is None,'SYNC_PROCESS_BOUNDARY_DRIVER_EXITED')
+    return _wait(deadline,driver_alive,lambda:_marker(path,BOUNDARY))
+
+
 def _approved_stdout(raw,phase):
     expected=list((BOUNDARY,RELEASED) if phase==LOSS else (READ,))
     expected.extend((('OPENNEXUS_SYNC_PROCESS_INPUT_SUMMARY '+SUMMARY.format(loss='true' if phase==LOSS else 'false',
@@ -298,7 +307,8 @@ def run_hosted_process_cycle(subject,phase,label,*,held=None):
                 loss_ready=validate_loss_ready(_wait(min(time.monotonic()+8,hold_deadline),owner,lambda:_device_json(_reads(subject),
                     'no_backup/owned-sync-process-'+phase+'-loss-ready.json')),parent,_clock(_reads(subject)),uid,value['window'])
                 record(subject.output/(label+'-loss-ready.json'),loss_ready)
-                _wait(min(time.monotonic()+.5,hold_deadline),owner,lambda:_marker(out_path,BOUNDARY))
+                stage='original-boundary-static-marker'
+                _wait_boundary(process,out_path,min(time.monotonic()+.5,hold_deadline))
                 stage='once-original-force-stop';require(time.monotonic()<hold_deadline,'SYNC_PROCESS_HOLD_RELEASE_TOO_LATE')
                 _terminate_original(subject,process,pid,uid,lifetime,parent,loss_ready,held,private,label)
                 stage='original-process-absence'
