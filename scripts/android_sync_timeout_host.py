@@ -22,6 +22,7 @@ from android_sync_host_touch import retain_post_input_owner
 from android_sync_process_host import _owner,_identity,_query,_reads,_signal,_wait,_stream,process_lifetime
 from android_sync_stop_host import OriginalHeldRevision,canonical,closed_json,record,same_fields,preinstrument_owner,_device_json
 from android_sync_timeout_failure import failure_kind,failure_reason,retain_failure
+from android_sync_timeout_owner import release_owner as _release_owner
 
 ENTRY='ReleaseSyncTimeoutRuntimeProbe'
 TIMEOUT,RESUME='cycle-timeout-original','cycle-after-timeout-original'
@@ -134,21 +135,21 @@ def _clock_sample(subject):
     return elapsed,start,end
 
 
-def _signal_bounded(subject,process,pid,uid,lifetime,label,path,deadline):
-    _owner(subject,process,pid,uid,lifetime)
+def _signal_bounded(subject,process,pid,uid,lifetime,label,path,deadline,*,after_release=False):
+    (_release_owner if after_release else _owner)(subject,process,pid,uid,lifetime)
     require(time.monotonic()+3<=deadline,'SYNC_TIMEOUT_SIGNAL_MARGIN_EXHAUSTED')
     _signal(_reads(subject),label,path)
     require(time.monotonic()<=deadline,'SYNC_TIMEOUT_SIGNAL_FINISHED_TOO_LATE')
 
 
 def _release(subject,process,pid,uid,lifetime,held,label,deadline):
-    _owner(subject,process,pid,uid,lifetime);require(time.monotonic()+3.5<=deadline,'SYNC_TIMEOUT_RELEASE_MARGIN_EXHAUSTED')
+    _release_owner(subject,process,pid,uid,lifetime);require(time.monotonic()+3.5<=deadline,'SYNC_TIMEOUT_RELEASE_MARGIN_EXHAUSTED')
     require(held.marker is not None and not held.release_attempted and held.release_control is None,'SYNC_TIMEOUT_RELEASE_NOT_ORIGINAL')
     held.current(held.control)
     operation=str(uuid.uuid4())
     record(subject.output/(label+'-release-control-intent.json'),dict(operation_id=operation,mode='release',expected_revision=1,
         held_operation_id=held.control['operation_id'],automatic_retry=False,client_receipt_known=False))
-    _owner(subject,process,pid,uid,lifetime);held.current(held.control)
+    _release_owner(subject,process,pid,uid,lifetime);held.current(held.control)
     require(time.monotonic()+3.5<=deadline,'SYNC_TIMEOUT_RELEASE_INTENT_FINISHED_TOO_LATE')
     held.release_attempted=True
     record(subject.output/(label+'-release-control-attempt.json'),dict(operation_id=operation,mode='release',expected_revision=1,
@@ -246,7 +247,7 @@ def run_hosted_timeout_cycle(subject,phase,label,*,held=None):
                 released=_wait(min(time.monotonic()+.5,signal_deadline-3),alive,held.read_released)
                 record(subject.output/(label+'-original-response-release.json'),released)
                 stage='same-parent-release-signal'
-                _signal_bounded(subject,process,pid,uid,lifetime,label+'-released','no_backup/owned-sync-timeout-released-'+parent['parent_intent_id']+'.finish',signal_deadline)
+                _signal_bounded(subject,process,pid,uid,lifetime,label+'-released','no_backup/owned-sync-timeout-released-'+parent['parent_intent_id']+'.finish',signal_deadline,after_release=True)
             stage='final-original-driver-result';final_deadline=time.monotonic()+(5 if phase==TIMEOUT else 30);last=time.monotonic()
             while process.poll() is None:
                 now=time.monotonic();require(last<=now<=final_deadline,'SYNC_TIMEOUT_FINAL_CLOCK_OR_TIMEOUT');last=now

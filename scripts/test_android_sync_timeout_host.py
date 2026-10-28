@@ -13,6 +13,7 @@ import android_sync_timeout_host as host
 import android_sync_host_touch as defaults
 import android_sync_process_host as process_host
 import android_release_upgrade as upgrade
+import android_sync_timeout_owner as release_owner
 from android_auth_fixture import atomic_json,read_json
 from android_sync_fixture import arm_control
 from test_android_sync_process_host import Harness as OriginalHarness,Process,P,A,C
@@ -48,6 +49,9 @@ class Harness(OriginalHarness):
 
     def shell(self,*args,**kwargs):
         def result(raw,code=0,err=b''):return SimpleNamespace(returncode=code,stdout=raw,stderr=err)
+        if args==('sh','-c',release_owner.PROPERTIES):
+            identity=self.subject.identity
+            return result(('\n'.join(identity[k] for k in ('qemu','api','build_type','debuggable','boot_id'))+'\n').encode())
         if args==('cat','/proc/uptime'):
             elapsed=3001 if self.variant=='stale-ready' else self.elapsed()
             return result((str(elapsed//1000)+'.'+str(elapsed%1000).zfill(3)+' 0.50\n').encode())
@@ -76,6 +80,7 @@ class Harness(OriginalHarness):
 
     def device(self,*args,**kwargs):
         def result(code=0,out=b'',err=b''):return SimpleNamespace(returncode=code,stdout=out,stderr=err)
+        if args==('emu','avd','name'):return result(out=(self.subject.identity['avd']+'\nOK\n').encode())
         assert args[:2]==('shell','-T');tokens=shlex.split(args[2])
         if tokens[:2]==['am','start']:self.events.append('launch');return result(out=b'owned Activity launch metadata\n')
         if tokens[:2]==['input','touchscreen']:
@@ -134,7 +139,7 @@ class Harness(OriginalHarness):
             self.process.emit(host.FAILED);self.failed_marker=True
 
     def execute(self):
-        with patch.object(host,'require_hosted_emulator'),patch.dict(host.os.environ,dict(GITHUB_RUN_ID='17',GITHUB_RUN_ATTEMPT='1')), \
+        with patch.object(host,'require_hosted_emulator'),patch.object(release_owner,'require_hosted_emulator'),patch.dict(host.os.environ,dict(GITHUB_RUN_ID='17',GITHUB_RUN_ATTEMPT='1')), \
              patch.object(host.subprocess,'Popen',side_effect=self.popen),patch.object(host,'arm_control',side_effect=self.release), \
              patch.object(host.ReleaseAuthBackground,'app_is_resumed',return_value=True), \
              patch.object(host.time,'monotonic',side_effect=lambda:self.now),patch.object(host.time,'sleep',side_effect=self.sleep):
@@ -254,11 +259,11 @@ class TimeoutHost(unittest.TestCase):
 
     def test_owner_changed_after_release_intent_blocks_actual_CAS(self):
         with tempfile.TemporaryDirectory() as folder:
-            h=Harness(folder);owner=host._owner
+            h=Harness(folder);owner=host._release_owner
             def observe(*args):
                 if (h.subject.output/'original-release-control-intent.json').exists():raise RuntimeError('controlled owner changed')
                 return owner(*args)
-            with patch.object(host,'_owner',side_effect=observe),self.assertRaises(RuntimeError):h.execute()
+            with patch.object(host,'_release_owner',side_effect=observe),self.assertRaises(RuntimeError):h.execute()
             self.assertNotIn('release-CAS',h.events);self.assertFalse(h.held.release_attempted)
             self.assertTrue((h.subject.output/'original-release-control-intent.json').is_file())
             self.assertFalse((h.subject.output/'original-release-control-attempt.json').exists())
@@ -284,10 +289,12 @@ class TimeoutHost(unittest.TestCase):
 
     def test_controlled_300ms_owner_rounds_keep_local_marker_reads_local_and_original_budgets(self):
         with tempfile.TemporaryDirectory() as folder:
-            h=Harness(folder);owner=host._owner
+            h=Harness(folder);owner=host._owner;release=host._release_owner
             def observe(*args):
                 result=owner(*args);h.now+=.3;return result
-            with patch.object(host,'_owner',side_effect=observe):h.execute()
+            def release_observe(*args):
+                result=release(*args);h.now+=.3;return result
+            with patch.object(host,'_owner',side_effect=observe),patch.object(host,'_release_owner',side_effect=release_observe):h.execute()
             self.assertEqual(h.events.count('tap'),1);self.assertEqual(h.events.count('release-CAS'),1)
             self.assertLessEqual(h.release_signal_at-h.tap_at,42)
 
