@@ -65,6 +65,11 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
                 failedGuard();SystemClock.sleep(50);
             }
             failedGuard();actions.complete();facts("OPENNEXUS_SYNC_TIMEOUT_RELEASE_GUARD "+actions.summary());return true;
+        } catch(Exception error) {
+            // Retain only closed facts already read by the original observer.
+            // Do not inspect UI again, record exception text, or change result.
+            if(OriginalSyncTimeoutActions.TIMEOUT.equals(phase))try {failureObservation(error);}catch(Exception ignored) {}
+            throw error;
         } finally {actions.close();facts("OPENNEXUS_SYNC_TIMEOUT_INPUT_SUMMARY "+actions.summary());}
     }
     @Override protected void awaitHostedCycleTouch(Rect original,Rect visible,int window) {
@@ -119,10 +124,25 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
             if(label(node,"Cycle completed"))complete++;
             if(label(node,"Cycle stopped"))stopped++;
         }
+        actions.recordScene(new int[]{failure,disabled,unknown,network,stop,complete,stopped,enabledCycle},SystemClock.elapsedRealtime());
         return OriginalSyncTimeoutActions.failedScene(failure,disabled,unknown,network,stop,complete,stopped,enabledCycle);
     }
     private void failedGuard() throws Exception {guardOwner(originalWindow,null);require(failedState(),"Original timeout failed UI changed");}
     static boolean networkAlert(String text) {return NETWORK.equals(text);}
+    private void failureObservation(Exception error) throws Exception {
+        int[] scene=actions.lastScene();JSONArray counts=new JSONArray();
+        if(scene!=null)for(int count:scene)counts.put(count);
+        String point="timeout-original-bounded-failed-state".equals(stage)?"waiting_failed_scene":
+            "timeout-original-held-until-release".equals(stage)?"waiting_release":"other";
+        write("owned-sync-timeout-"+actions.phase+"-failure-observation.json",new JSONObject().put("schema",1)
+            .put("phase",actions.phase).put("parent_intent_id",actions.parent).put("input_intent_id",actions.input)
+            .put("package",APP).put("uid",originalUid).put("window",originalWindow).put("phase_stage",point)
+            .put("original_ready_elapsed_ms",actions.originalReadyAt()).put("input_finished",actions.originalInputFinished())
+            .put("last_scene_scan_finished",scene!=null).put("label_counts",scene==null?JSONObject.NULL:counts)
+            .put("observed_elapsed_ms",scene==null?JSONObject.NULL:actions.lastSceneAt()).put("count_saturated_at",2)
+            .put("driver_error_kind",error instanceof IllegalStateException && "OWNED_SYNC_TIMEOUT_ORIGINAL_SEQUENCE".equals(error.getMessage())?"sequence_guard":"unclassified")
+            .put("failure_only",true).put("native_timeout_verified",false).put("raw_UI_recorded",false));
+    }
     private void write(String name,JSONObject value) throws Exception {
         OriginalSyncStopActions.writeOnce(new File(getContext().getNoBackupFilesDir(),name),value.toString().getBytes(StandardCharsets.UTF_8));
     }

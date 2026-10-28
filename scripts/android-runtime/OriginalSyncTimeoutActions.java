@@ -15,6 +15,8 @@ final class OriginalSyncTimeoutActions {
     private State state=State.NEW;
     private long readyAt=-1;
     private boolean inputFinished,failed,released;
+    private int[] observedScene;
+    private long observedAt=-1;
 
     OriginalSyncTimeoutActions(String phase,String parent,String input) {
         need(allowed(phase) && OriginalSyncStopActions.canonical(parent)
@@ -51,6 +53,17 @@ final class OriginalSyncTimeoutActions {
         need(TIMEOUT.equals(phase)?state==State.RELEASED:state==State.INPUT_FINISHED);state=State.COMPLETE;
     }
     void beforeProductUi() {need(state!=State.UNKNOWN && state!=State.COMPLETE);}
+    void recordScene(int[] counts,long elapsed) {
+        need(TIMEOUT.equals(phase) && inputFinished && state!=State.UNKNOWN && state!=State.COMPLETE
+            && readyAt>=0 && elapsed>=readyAt && elapsed>=observedAt && counts!=null && counts.length==8);
+        int[] bounded=new int[8];
+        for(int i=0;i<8;i++) {need(counts[i]>=0);bounded[i]=Math.min(2,counts[i]);}
+        observedScene=bounded;observedAt=elapsed;
+    }
+    int[] lastScene() {return observedScene==null?null:observedScene.clone();}
+    long lastSceneAt() {return observedAt;}
+    long originalReadyAt() {return readyAt;}
+    boolean originalInputFinished() {return inputFinished;}
     void close() {if(state!=State.COMPLETE)state=State.UNKNOWN;}
     String summary() {
         return "input_finished="+inputFinished+" failed_cycle_UI_observed="+failed+" network_error_UI_observed="+failed

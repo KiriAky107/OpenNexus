@@ -21,6 +21,7 @@ from android_sync_fixture import arm_control
 from android_sync_host_touch import retain_post_input_owner
 from android_sync_process_host import _owner,_identity,_query,_reads,_signal,_wait,_stream,process_lifetime
 from android_sync_stop_host import OriginalHeldRevision,canonical,closed_json,record,same_fields,preinstrument_owner,_device_json
+from android_sync_timeout_failure import failure_kind,failure_reason,retain_failure
 
 ENTRY='ReleaseSyncTimeoutRuntimeProbe'
 TIMEOUT,RESUME='cycle-timeout-original','cycle-after-timeout-original'
@@ -261,8 +262,12 @@ def run_hosted_timeout_cycle(subject,phase,label,*,held=None):
                 original_input_intent_id=parent['input_intent_id'],same_live_instrumentation_through_original_release=phase==TIMEOUT,
                 failed_UI_observed_while_original_response_held=phase==TIMEOUT,native_timeout_verified=False,native_cycle_acknowledged=False,client_receipt_known=False))
         except Exception as error:
-            record(subject.output/(label+'-host-failure.json'),dict(stage=stage,error_type=type(error).__name__,automatic_retry=False,
-                whole_timeout_component_passed=False,native_timeout_verified=False));raise
+            record(subject.output/(label+'-host-failure.json'),dict(stage=stage,error_type=failure_kind(error),automatic_retry=False,
+                whole_timeout_component_passed=False,native_timeout_verified=False,guard_code=failure_reason(error)))
+            if phase==TIMEOUT and stage=='original-failed-ready':
+                try:retain_failure(_reads(subject),label,parent,ready)
+                except Exception:pass  # Preserve the original exception and immutable wholefalse.
+            raise
         finally:
             if process is not None and process.poll() is None:
                 process.terminate()
