@@ -12,6 +12,7 @@ from unittest.mock import patch
 import android_sync_timeout_host as host
 import android_sync_host_touch as defaults
 import android_sync_process_host as process_host
+import android_release_upgrade as upgrade
 from android_auth_fixture import atomic_json,read_json
 from android_sync_fixture import arm_control
 from test_android_sync_process_host import Harness as OriginalHarness,Process,P,A,C
@@ -296,6 +297,18 @@ class TimeoutHost(unittest.TestCase):
         clock=[100.]
         def late(*args):clock[0]+=1.01;return b'1.20 0.50\n'
         with patch.object(host.time,'monotonic',side_effect=lambda:clock[0]),patch.object(host,'_query',side_effect=late),self.assertRaises(RuntimeError):host._clock_sample(object())
+
+    def test_ready_freshness_checked_after_private_actual_command_intent_before_device_input(self):
+        with tempfile.TemporaryDirectory() as folder:
+            h=Harness(folder);exclusive=upgrade.exclusive
+            def delayed(path,raw):
+                exclusive(path,raw)
+                if path.name=='once-intent.json' and 'original-host-touch' in path.parts:h.now+=2.1
+            with patch.object(upgrade,'exclusive',side_effect=delayed):
+                try:h.execute()
+                except RuntimeError:pass
+            self.assertNotIn('tap',h.events);self.assertNotIn('input-finish',h.events)
+            self.assertFalse(h.subject.phases)
 
     def test_static_wrappers_wrong_order_duplicates_and_other_phase_refused(self):
         summary=('OPENNEXUS_SYNC_TIMEOUT_INPUT_SUMMARY '+host.SUMMARY.format(failed='false',released='false')).encode()

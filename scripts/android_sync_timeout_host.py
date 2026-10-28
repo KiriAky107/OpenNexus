@@ -96,11 +96,18 @@ def _approved_stdout(raw,phase):
     require(lines==expected,'SYNC_TIMEOUT_STREAM_NOT_CLOSED_STATIC_RESULT')
 
 
-def _command(subject,private,label,args,*,timeout,empty):
+def _command(subject,private,label,args,*,timeout,empty,before_send=None):
     record(subject.output/(label+'-intent.json'),dict(arguments=list(args),package=APP,automatic_retry=False))
     journal=private/label;journal.mkdir(exist_ok=False)
+    invoked=False
+    def device(*actual,**kwargs):
+        nonlocal invoked
+        require(tuple(actual)==tuple(args) and not invoked,'SYNC_TIMEOUT_ORIGINAL_COMMAND_REENTRY')
+        if before_send is not None:before_send()
+        invoked=True
+        return subject.device(*actual,**kwargs)
     try:
-        result=ReleaseUpgrade.original_command(SimpleNamespace(output=journal,device=subject.device),'once',args,timeout=timeout)
+        result=ReleaseUpgrade.original_command(SimpleNamespace(output=journal,device=device),'once',args,timeout=timeout)
         require(type(result.returncode) is int and result.returncode==0 and type(result.stdout) is bytes
             and type(result.stderr) is bytes and result.stderr==b'' and len(result.stdout)<=16384
             and (result.stdout==b'' if empty else b'Error:' not in result.stdout and b'Exception' not in result.stdout),
@@ -108,7 +115,7 @@ def _command(subject,private,label,args,*,timeout,empty):
         return result
     finally:
         path=journal/'once-result.json';value=closed_json(path.read_bytes()) if path.exists() else None
-        facts=dict(returncode=None if value is None else value['returncode'],unknown_result=value is None or value.get('unknown_result',False),
+        facts=dict(returncode=None if value is None else value['returncode'],unknown_result=value is None or value.get('unknown_result',False),device_command_invoked=invoked,
             automatic_retry=False,unvalidated_streams_exported=False)
         for name in ('stdout','stderr'):
             path=journal/('once.'+name)
@@ -198,7 +205,18 @@ def run_hosted_timeout_cycle(subject,phase,label,*,held=None):
                 preinput_elapsed_ms=elapsed,original_ready_elapsed_ms=ready['elapsed_ms'],host_release_bound_ms=HOLD_MS,driver_failure_bound_ms=DRIVER_MS,
                 product_client_bound_ms=CLIENT_MS,proxy_hold_bound_ms=45000,clock_reset_on_marker=False,native_timeout_verified=False))
             stage='original-input'
-            _command(subject,private,label+'-host-touch',('shell','-T',shlex.join(('input','touchscreen','tap',str(ready['x']),str(ready['y'])))),timeout=5,empty=True)
+            gate={}
+            def final_input_guard():
+                owner();now,_,_=_clock_sample(subject);validate_ready(ready,parent,now,uid)
+                require(time.monotonic()<deadline,'SYNC_TIMEOUT_INPUT_INTENT_FINISHED_TOO_LATE')
+                gate.update(original_lifetime=lifetime,same_original_foreground_PID_UID_boot=True,original_instrumentation_alive=True,
+                    ready_age_ms=now-ready['elapsed_ms'],ready_age_bound_ms=2000,
+                    observed_after_private_command_intent=True,native_cycle_acknowledged=False)
+            try:
+                _command(subject,private,label+'-host-touch',('shell','-T',shlex.join(('input','touchscreen','tap',str(ready['x']),str(ready['y'])))),
+                    timeout=5,empty=True,before_send=final_input_guard)
+            finally:
+                if gate:record(subject.output/(label+'-input-owner-at-command.json'),gate)
             retain_post_input_owner(_reads(subject),process,pid,label)
             if phase==TIMEOUT:
                 stage='original-held-service-marker';marker=_wait(min(time.monotonic()+5,deadline),owner,held.read_held)
