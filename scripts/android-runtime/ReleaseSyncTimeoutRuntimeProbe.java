@@ -117,7 +117,7 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
             if(!APP.equals(text(node.getPackageName())) || node.getWindowId()!=originalWindow || node.isPassword() || !node.isVisibleToUser())continue;
             if(label(node,"Cycle did not complete"))failure++;
             if(!node.isEditable() && text(node.getText()).equals(UNKNOWN))unknown++;
-            if(!node.isEditable() && networkAlert(text(node.getText())))network++;
+            if(networkAlertNode(node))network++;
             if(label(node,"Sync one cycle now") && !node.isEnabled()) {Rect bounds=new Rect();node.getBoundsInScreen(bounds);guardOwner(originalWindow,bounds);disabled++;}
             if(label(node,"Sync one cycle now") && node.isEnabled())enabledCycle++;
             if(label(node,"Stop this cycle") && node.isEnabled())stop++;
@@ -129,6 +129,14 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
     }
     private void failedGuard() throws Exception {guardOwner(originalWindow,null);require(failedState(),"Original timeout failed UI changed");}
     static boolean networkAlert(String text) {return NETWORK.equals(text);}
+    static boolean networkAlertNode(AccessibilityNodeInfo node) {
+        if(node.isEditable())return false;
+        String value=text(node.getText()),description=text(node.getContentDescription());
+        // An occupied label channel must be the complete fixed product warning.
+        // The surrounding scene still checks the original owner and visibility.
+        return (networkAlert(value) || networkAlert(description))
+            && (value.isEmpty() || networkAlert(value)) && (description.isEmpty() || networkAlert(description));
+    }
     private void failureObservation(Exception error) throws Exception {
         int[] scene=actions.lastScene();JSONArray counts=new JSONArray();
         if(scene!=null)for(int count:scene)counts.put(count);

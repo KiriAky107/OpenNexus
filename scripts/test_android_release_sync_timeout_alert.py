@@ -45,6 +45,13 @@ class TimeoutAlert(unittest.TestCase):
                 run([str(javac),'-J-Xmx128m','-encoding','UTF-8','-classpath',str(sdk),'-d',str(actual),*map(str,sources)])
                 stubs=dict(STUBS);stubs['android/app/Instrumentation.java']=stubs['android/app/Instrumentation.java'].replace('public void sendStatus',
                     'public android.content.Context getTargetContext(){throw new AssertionError("No device target in alert fixture");}\n public void sendStatus')
+                stubs['android/view/accessibility/AccessibilityNodeInfo.java']='''package android.view.accessibility;
+public final class AccessibilityNodeInfo {
+ private final CharSequence text,description;private final boolean editable;
+ public AccessibilityNodeInfo(String text,String description,boolean editable){this.text=text;this.description=description;this.editable=editable;}
+ public CharSequence getText(){return text;} public CharSequence getContentDescription(){return description;}
+ public boolean isEditable(){return editable;}
+}'''
                 paths=[]
                 for name,value in stubs.items():
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value,'utf-8');paths.append(str(path))
@@ -53,6 +60,7 @@ class TimeoutAlert(unittest.TestCase):
                 result=run([str(java),'-Xmx64m','-cp',os.pathsep.join(map(str,(harness,actual,sdk))),
                     'cc.kronecker.opennexus.testdriver.ReleaseSyncTimeoutAlertCheck',alert])
                 self.assertIn(b'RELEASE_SYNC_TIMEOUT_FIXED_ALERT_OK allowed=1 refused=9 scene_boundaries=3 actual_Android_UI=0',result.stdout)
+                self.assertIn(b'node_channel_checks=20',result.stdout)
                 for name,meta in inventory.items():self.assertEqual(hashlib.sha256((ROOT.parent/name).read_bytes()).hexdigest(),meta['sha256'])
         finally:
             print('RELEASE_SYNC_TIMEOUT_ALERT_PROOF '+json.dumps(dict(product_source=PRODUCT,fixed_source_files={k:{n:v for n,v in item.items() if n!='raw'} for k,item in fixed.items()},
