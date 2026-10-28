@@ -17,7 +17,7 @@ import org.json.JSONObject;
 public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
     private static final String DRIVER="cc.kronecker.opennexus.testdriver";
     private static final String UNKNOWN="The previous outcome is not fully confirmed. Read the queue and original records before explicitly continuing; no new operation is sent automatically.";
-    private static final String NETWORK="Cannot reach the service. Check the network and service address. (SYNC_NETWORK_ERROR)";
+    private static final String NETWORK="Last recorded sync error · Cannot reach the service. Check the network and service address. (SYNC_NETWORK_ERROR)";
     private OriginalSyncTimeoutActions actions;
     private int originalWindow=-1,originalUid=-1;
     public ReleaseSyncTimeoutRuntimeProbe() {super(true);}
@@ -112,7 +112,7 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
             if(!APP.equals(text(node.getPackageName())) || node.getWindowId()!=originalWindow || node.isPassword() || !node.isVisibleToUser())continue;
             if(label(node,"Cycle did not complete"))failure++;
             if(!node.isEditable() && text(node.getText()).equals(UNKNOWN))unknown++;
-            if(!node.isEditable() && text(node.getText()).equals(NETWORK))network++;
+            if(!node.isEditable() && networkAlert(text(node.getText())))network++;
             if(label(node,"Sync one cycle now") && !node.isEnabled()) {Rect bounds=new Rect();node.getBoundsInScreen(bounds);guardOwner(originalWindow,bounds);disabled++;}
             if(label(node,"Sync one cycle now") && node.isEnabled())enabledCycle++;
             if(label(node,"Stop this cycle") && node.isEnabled())stop++;
@@ -122,6 +122,7 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
         return OriginalSyncTimeoutActions.failedScene(failure,disabled,unknown,network,stop,complete,stopped,enabledCycle);
     }
     private void failedGuard() throws Exception {guardOwner(originalWindow,null);require(failedState(),"Original timeout failed UI changed");}
+    static boolean networkAlert(String text) {return NETWORK.equals(text);}
     private void write(String name,JSONObject value) throws Exception {
         OriginalSyncStopActions.writeOnce(new File(getContext().getNoBackupFilesDir(),name),value.toString().getBytes(StandardCharsets.UTF_8));
     }
