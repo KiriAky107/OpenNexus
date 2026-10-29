@@ -471,6 +471,12 @@ export const useChatStore = defineStore('chat', () => {
       },
       onError(error) {
         if (version !== streamVersion) return
+        // Buffered events can still arrive after a transport/parser failure.
+        // Close this generation before cancellation can invoke more callbacks.
+        streamVersion++
+        const failedClient = sseClient
+        sseClient = null
+        failedClient?.cancel()
         const text = `\n\n${t('连接失败：', 'Connection failed: ')}${error.message}`
         aiMsg.content += text
         aiMsg.activity?.push({ type: 'text', text })
