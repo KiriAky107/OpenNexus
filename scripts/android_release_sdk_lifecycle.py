@@ -179,12 +179,51 @@ def select_launcher(ctx):
     return str(ctx['launcher'])
 
 
+def emulator_catalogue(raw):
+    """Project only the installed fixed package from two closed listing layouts."""
+    plain = type(raw) is bytes and len(raw) <= 4 * 1024 ** 2 and all(
+        byte in (9, 10, 13) or 32 <= byte <= 126 for byte in raw)
+    sections = available = candidates = matches = 0
+    kinds = set()
+    installed = False
+    if plain:
+        for line in raw.decode('ascii').splitlines():
+            line = line.strip()
+            if line == 'Installed packages:':
+                sections += 1; installed = True; continue
+            if line in ('Available packages:', 'Available Updates:'):
+                available += 1; installed = False; continue
+            if not installed or not line: continue
+            if '|' in line:
+                parts = [part.strip() for part in line.split('|')]
+                if parts[0] != 'emulator': continue
+                candidates += 1
+                if (len(parts) == 4 and parts[:3] == ['emulator', kernel.FIXED['version'], 'Android Emulator']
+                        and parts[3] in ('emulator', 'emulator/')):
+                    matches += 1; kinds.add('legacy_table')
+            elif line.split()[0] == 'emulator':
+                candidates += 1
+                if re.fullmatch(r'emulator[ \t]+37\.2\.12[ \t]+Android Emulator', line):
+                    matches += 1; kinds.add('android_cli_table')
+    passed = plain and sections == 1 and available == 0 and candidates == matches == 1
+    return dict(plain_ascii=plain, installed_sections=min(sections, 2), available_sections=min(available, 2),
+                emulator_candidate_rows=min(candidates, 2), matching_rows=min(matches, 2),
+                catalogue_kind=next(iter(kinds)) if len(kinds) == 1 else 'none', installed_exactly_once=passed)
+
+
 def image_ready(ctx):
     prepared(ctx)
     value = read(ctx, 'image-result', ('owner', 'passed', 'commands', 'image_properties',
-                                      'emulator_registered_version', 'licenses', 'runtime_verified'))
+                                      'emulator_registered_version', 'emulator_catalogue', 'licenses', 'runtime_verified'))
     require(value['passed'] is True and value['runtime_verified'] is False and
             value['emulator_registered_version'] == kernel.FIXED['version'], 'SDK_IMAGE_IDENTITY')
+    catalogue = value['emulator_catalogue']
+    require(type(catalogue) is dict and set(catalogue) == {'plain_ascii', 'installed_sections', 'available_sections',
+            'emulator_candidate_rows', 'matching_rows', 'catalogue_kind', 'installed_exactly_once'} and
+            catalogue['plain_ascii'] is True and catalogue['installed_exactly_once'] is True and
+            all(type(catalogue[key]) is int and catalogue[key] == expected for key, expected in (
+                ('installed_sections', 1), ('available_sections', 0), ('emulator_candidate_rows', 1), ('matching_rows', 1))) and
+            catalogue['catalogue_kind'] in ('legacy_table', 'android_cli_table'), 'SDK_IMAGE_IDENTITY')
     private = ctx['root'] / 'runtime'
     manager = str(ctx['sdk'] / 'cmdline-tools/latest/bin/sdkmanager')
     commands = [[manager, '--sdk_root=' + str(private), '--list_installed'],
@@ -248,7 +287,7 @@ def install_image(ctx):
                 [str(manager), '--sdk_root=' + str(private), '--install', 'system-images;android-36;google_apis;x86_64']]
     emit(ctx, 'image-intent', dict(owner=ctx['owner'], argv=commands, automatic_retry=False))
     result = dict(owner=ctx['owner'], passed=False, commands=[], image_properties=None,
-                  emulator_registered_version=None, licenses={}, runtime_verified=False)
+                  emulator_registered_version=None, emulator_catalogue=None, licenses={}, runtime_verified=False)
     try:
         licenses = private / 'licenses'
         require(not licenses.exists() and not licenses.is_symlink(), 'SDK_LICENSE')
@@ -271,10 +310,9 @@ def install_image(ctx):
             require(completed.returncode == 0 and len(completed.stdout) <= 4 * 1024 ** 2 and
                     len(completed.stderr) <= 4 * 1024 ** 2, 'SDK_COMMAND_UNKNOWN')
             if index == 0:
-                rows = [parts for line in completed.stdout.decode('ascii').splitlines()
-                        if len(parts := [x.strip() for x in line.split('|')]) == 4 and parts[0] == 'emulator']
-                require(rows == [['emulator', kernel.FIXED['version'], 'Android Emulator', 'emulator']], 'SDK_REGISTERED_EMULATOR')
-                result['emulator_registered_version'] = rows[0][1]
+                result['emulator_catalogue'] = emulator_catalogue(completed.stdout)
+                require(result['emulator_catalogue']['installed_exactly_once'], 'SDK_REGISTERED_EMULATOR')
+                result['emulator_registered_version'] = kernel.FIXED['version']
             prepared(ctx)
         image = private / 'system-images/android-36/google_apis/x86_64'
         data = raw_file(image / 'source.properties', 16384)
@@ -417,16 +455,20 @@ def adb_absent(ctx):
 def cleanup(ctx):
     emit(ctx, 'cleanup-intent', dict(owner=ctx['owner'], automatic_retry=False, no_stop_or_kill=True))
     result = dict(owner=ctx['owner'], passed=False, no_stop_or_kill=True, runtime_verified=False)
+    stage = 'preparation-record'
     try:
         value = read(ctx, 'prepare-result', ('owner', 'passed', 'root_identity', 'launcher', 'kernel_sha256', 'runtime_verified'))
+        stage = 'kernel-record'
         require(value['runtime_verified'] is False and
                 hashlib.sha256(raw_file(ctx['evidence'] / 'sdk-kernel-result.json')).hexdigest() == value['kernel_sha256'],
                 'SDK_PREPARE_RESULT')
         if value['passed'] is False and not ctx['root'].exists():
             result.update(passed=True, state='failed_preparation_namespace_absent', SDK_removed_here=False)
         else:
+            stage = 'root-owner'
             owned_prepared(ctx)
             previous = None
+            stage = 'original-pid-record'
             if (ctx['evidence'] / 'sdk-launch-observed.json').exists():
                 previous = read(ctx, 'launch-observed', ('owner', 'pid', 'uid', 'start_ticks', 'runtime_verified'))
                 require(type(previous['pid']) is int and 1 <= previous['pid'] <= 4194304 and
@@ -435,25 +477,36 @@ def cleanup(ctx):
             deadline = time.monotonic() + 10
             last_clock = deadline - 10
             while True:
+                stage = 'wait-clock'
                 now = time.monotonic()
                 require(now >= last_clock and now <= deadline, 'SDK_CLEANUP_DEADLINE')
                 last_clock = now
+                stage = 'host-boot'
                 require(boot() == ctx['owner']['host_boot_id'], 'SDK_BOOT')
+                stage = 'original-pid'
                 current = proc(previous['pid']) if previous else None
                 if current is not None:
                     require(current['uid'] == previous['uid'] and current['start_ticks'] == previous['start_ticks'],
                             'SDK_ORIGINAL_PID_REUSED')
+                stage = 'sdk-processes'
                 found = sdk_processes(ctx)
                 if not found and (current is None or current['state'] == 'Z'):
+                    stage = 'adb-absence'
                     result['ADB_read'] = adb_absent(ctx)
+                    stage = 'final-root-owner'
                     owned_prepared(ctx)
+                    stage = 'final-original-pid'
                     final_pid = proc(previous['pid']) if previous else None
                     require(final_pid is None or (final_pid['uid'] == previous['uid'] and
                             final_pid['start_ticks'] == previous['start_ticks'] and final_pid['state'] == 'Z'),
                             'SDK_ORIGINAL_PID_REUSED')
+                    stage = 'final-processes-and-boot'
                     require(not sdk_processes(ctx) and boot() == ctx['owner']['host_boot_id'], 'SDK_SDK_PROCESS_PRESENT')
+                    stage = 'final-owner'
                     root_owner(ctx, value)
+                    stage = 'final-clock'
                     require(last_clock <= time.monotonic() <= deadline, 'SDK_CLEANUP_DEADLINE')
+                    stage = 'remove-owned-runtime'
                     shutil.rmtree(ctx['root'])
                     result.update(passed=True, state='SDK_removed_after_readonly_AVD_and_host_process_absence',
                                   SDK_removed_here=True, owned_SDK_executables_absent=True,
@@ -462,6 +515,11 @@ def cleanup(ctx):
                 time.sleep(0.1)
     except Exception as error:
         result['guard_code'] = str(error) if type(error) is kernel.ArchiveError and str(error) in SAFE else 'SDK_CLEANUP_UNAVAILABLE'
+        result['failure_stage'] = stage
+        result['error_kind'] = {PermissionError: 'permission_denied', FileNotFoundError: 'file_missing',
+            FileExistsError: 'file_exists', subprocess.TimeoutExpired: 'timeout', OSError: 'io',
+            json.JSONDecodeError: 'schema', UnicodeDecodeError: 'schema', kernel.ArchiveError: 'sequence_guard'}.get(
+                type(error), 'unclassified')
         result.setdefault('SDK_removed_here', False)
     emit(ctx, 'cleanup-result', result)
     return result

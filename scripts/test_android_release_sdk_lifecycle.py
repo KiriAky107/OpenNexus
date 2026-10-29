@@ -72,7 +72,9 @@ class SDKLifecycle(unittest.TestCase):
             self.assertEqual(argv[1], '--sdk_root=' + str(self.ctx['root'] / 'runtime'))
             self.assertIs(kwargs['stdin'], subprocess.DEVNULL)
             if argv[-1] == '--list_installed':
-                return subprocess.CompletedProcess(argv, 0, b'emulator | 37.2.12 | Android Emulator | emulator\n', b'private repository warning')
+                return subprocess.CompletedProcess(argv, 0,
+                    b'Installed packages:\nPath | Version | Description | Location\nemulator | 37.2.12 | Android Emulator | emulator/\n',
+                    b'private repository warning')
             self.assertEqual(argv[-2:], ['--install', 'system-images;android-36;google_apis;x86_64'])
             image = self.ctx['root'] / 'runtime/system-images/android-36/google_apis/x86_64'; image.mkdir(parents=True)
             (image / 'source.properties').write_bytes(b'AndroidVersion.ApiLevel=36\nSystemImage.Abi=x86_64\nSystemImage.TagId=google_apis\n')
@@ -235,6 +237,58 @@ class SDKLifecycle(unittest.TestCase):
         self.assertFalse(value['passed']); self.assertEqual(value['guard_code'], 'SDK_REGISTERED_EMULATOR')
         self.assertEqual(len(commands), 1); self.assertEqual(commands[0][-1], '--list_installed')
         self.assertNotIn('--install', commands[0]); self.assertEqual(len(self.network), 1)
+
+    def test_documented_installed_catalogue_accepts_only_the_original_fixed_package(self):
+        subject.prepare(self.ctx)
+        def documented(argv, **kwargs):
+            if argv[-1] == '--list_installed':
+                self.commands.append(argv)
+                return subprocess.CompletedProcess(argv, 0,
+                    b'Installed packages:\n  emulator                37.2.12                Android Emulator\n', b'')
+            return self.command(argv, **kwargs)
+        with patch.object(subject.subprocess, 'run', side_effect=documented):
+            value = subject.install_image(self.ctx)
+        self.assertTrue(value['passed'], value.get('guard_code'))
+        self.assertEqual(len(value['commands']), 2)
+        self.assertEqual(value['emulator_catalogue']['catalogue_kind'], 'android_cli_table')
+        self.assertTrue(value['emulator_catalogue']['installed_exactly_once'])
+
+    def test_cleanup_failure_keeps_only_exact_stage_and_closed_error_kind(self):
+        subject.prepare(self.ctx)
+        with patch.object(subject, 'sdk_processes', side_effect=PermissionError('/private/provider/path')):
+            value = subject.cleanup(self.ctx)
+        self.assertFalse(value['passed']); self.assertTrue(self.ctx['root'].exists())
+        self.assertEqual(value['error_kind'], 'permission_denied')
+        self.assertEqual(value['failure_stage'], 'sdk-processes')
+        self.assertNotIn('provider', json.dumps(value)); self.assertTrue(value['no_stop_or_kill'])
+
+    def test_catalogue_layout_identity_and_private_output_are_closed(self):
+        row = b'emulator | 37.2.12 | Android Emulator | emulator/\n'
+        header = b'Installed packages:\n'
+        for location in (b'emulator', b'emulator/'):
+            raw = header + row.replace(b'emulator/\n', location + b'\n')
+            self.assertTrue(subject.emulator_catalogue(raw)['installed_exactly_once'])
+        bad = [row, b'Available packages:\n' + row, header + row * 2, header * 2 + row,
+            header + row.replace(b'37.2.12', b'37.2.13'), header + row.replace(b'emulator/\n', b'../emulator/\n'),
+            header + row.replace(b'Android Emulator', b'Android Emulator private'), header + row + b'Available packages:\n',
+            header + b'emulator 37.2.12 -> 37.2.13 Android Emulator\n', header + row + b'\x00private',
+            header + row + b'\xff', header + row.replace(b'emulator/\n', b'/private/path\n')]
+        for raw in bad:
+            value = subject.emulator_catalogue(raw)
+            self.assertFalse(value['installed_exactly_once'])
+            self.assertNotIn('private', json.dumps(value)); self.assertNotIn('37.2.13', json.dumps(value))
+            self.assertTrue(all(0 <= value[key] <= 2 for key in (
+                'installed_sections', 'available_sections', 'emulator_candidate_rows', 'matching_rows')))
+
+    def test_catalogue_projection_is_checked_again_before_image_or_AVD_use(self):
+        self.prepared_image()
+        path = self.ctx['evidence'] / 'sdk-image-result.json'; original = json.loads(path.read_bytes())
+        for key, value in (('matching_rows', True), ('catalogue_kind', 'unknown'), ('private', 'secret')):
+            changed = json.loads(json.dumps(original)); changed['emulator_catalogue'][key] = value
+            path.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(subject.kernel.ArchiveError, 'SDK_IMAGE_IDENTITY'):
+                subject.select_launcher(self.ctx)
+        self.assertFalse((self.ctx['evidence'] / 'sdk-launch-selection-intent.json').exists())
 
     def test_wrong_private_image_API_is_rejected_before_launcher_selection(self):
         subject.prepare(self.ctx)
