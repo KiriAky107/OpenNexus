@@ -316,8 +316,7 @@ class SDKLifecycle(unittest.TestCase):
         process.assert_not_called()
 
     def test_bounded_proc_scan_keeps_only_own_SDK_executable_presence(self):
-        directory = self.workspace / 'proc'; directory.mkdir()
-        for pid in ('321', '322'): (directory / pid).mkdir()
+        directory = self.proc_fixture()
         real_path = Path
         def executable(path):
             return str(self.ctx['launcher']) if path.parent.name == '321' else '/private/provider-process'
@@ -326,6 +325,83 @@ class SDKLifecycle(unittest.TestCase):
             value = subject.sdk_processes(self.ctx)
         self.assertEqual(value, [321]); self.assertNotIn('private', json.dumps(value))
         self.assertFalse(subject.owns_executable(self.ctx, str(self.ctx['root'] / 'runtime/emulator/../foreign')))
+
+    def proc_fixture(self, pids=('321', '322')):
+        directory = self.workspace / 'proc'; directory.mkdir()
+        for pid in pids:
+            path = directory / pid; path.mkdir()
+            (path / 'stat').write_bytes((pid + ' (fixture) S ').encode() + b'0 ' * 18 + b'17 ' + b'0 ' * 5)
+        return directory
+
+    def test_permission_scoped_read_keeps_actual_SDK_process_and_excludes_unrelated_one(self):
+        directory = self.proc_fixture(); real_path = Path
+        def executable(path):
+            if path.parent.name == '321': return str(self.ctx['launcher'])
+            raise PermissionError('private denied executable')
+        def readonly(argv, **kwargs):
+            self.assertEqual(argv, ['/usr/bin/sudo', '-n', '--', '/usr/bin/readlink', '--', '/proc/322/exe'])
+            self.assertEqual(kwargs['timeout'], 1); self.assertIs(kwargs['stdin'], subprocess.DEVNULL)
+            return subprocess.CompletedProcess(argv, 0, b'/usr/bin/python3\n', b'')
+        with patch.object(subject, 'Path', side_effect=lambda p: directory if p == '/proc' else real_path(p)), \
+             patch.object(subject.os, 'readlink', side_effect=executable), \
+             patch.object(subject.subprocess, 'run', side_effect=readonly) as command:
+            value = subject.sdk_processes(self.ctx)
+        self.assertEqual(value, [321]); self.assertEqual(command.call_count, 1)
+        self.assertNotIn('private', json.dumps(value))
+
+    def test_permission_read_cannot_discard_an_owned_SDK_or_ignore_boot_change(self):
+        directory = self.proc_fixture(('322',)); real_path = Path
+        def denied(_): raise PermissionError('private')
+        def readonly(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, b'/owned-sdk/emulator/qemu\n', b'')
+        with patch.object(subject, 'Path', side_effect=lambda p: directory if p == '/proc' else real_path(p)), \
+             patch.object(subject.os, 'readlink', side_effect=denied), \
+             patch.object(subject.subprocess, 'run', side_effect=readonly), \
+             patch.object(subject, 'owns_executable', side_effect=lambda ctx, value: value == '/owned-sdk/emulator/qemu'):
+            self.assertEqual(subject.sdk_processes(self.ctx), [322])
+            with patch.object(subject, 'boot', return_value='different-boot'), \
+                 patch.object(subject.subprocess, 'run') as command, \
+                 self.assertRaisesRegex(subject.kernel.ArchiveError, 'SDK_PROC_OWNER_CHANGED'):
+                subject.sdk_processes(self.ctx)
+            command.assert_not_called()
+
+    def test_permission_read_unknown_output_PID_reuse_and_late_read_never_retry(self):
+        directory = self.proc_fixture(('322',)); real_path = Path
+        stat_path = directory / '322/stat'; original = stat_path.read_bytes()
+        def denied(_): raise PermissionError('private')
+        for mode in ('stderr', 'multi-line', 'PID-reuse', 'late', 'timeout'):
+            stat_path.write_bytes(original)
+            def readonly(argv, **kwargs):
+                if mode == 'timeout': raise subprocess.TimeoutExpired(argv, 1, output=b'private')
+                if mode == 'PID-reuse': stat_path.write_bytes(original.replace(b'17 ', b'18 '))
+                return subprocess.CompletedProcess(argv, 0,
+                    b'/usr/bin/python3\nprivate\n' if mode == 'multi-line' else b'/usr/bin/python3\n',
+                    b'private error' if mode == 'stderr' else b'')
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(subject, 'Path', side_effect=lambda p: directory if p == '/proc' else real_path(p)))
+                stack.enter_context(patch.object(subject.os, 'readlink', side_effect=denied))
+                command = stack.enter_context(patch.object(subject.subprocess, 'run', side_effect=readonly))
+                if mode == 'late': stack.enter_context(patch.object(subject.time, 'monotonic', side_effect=[0, 1.001]))
+                with self.assertRaises((subject.kernel.ArchiveError, subprocess.TimeoutExpired)):
+                    subject.sdk_processes(self.ctx)
+                self.assertEqual(command.call_count, 1)
+
+    def test_cleanup_requires_two_permission_safe_scans_and_ADB_absence_before_removal(self):
+        subject.prepare(self.ctx); directory = self.proc_fixture(('322',)); real_path = Path
+        def denied(_): raise PermissionError('private')
+        def readonly(argv, **kwargs):
+            if argv[0] == '/usr/bin/sudo':
+                self.assertEqual(argv, ['/usr/bin/sudo', '-n', '--', '/usr/bin/readlink', '--', '/proc/322/exe'])
+                return subprocess.CompletedProcess(argv, 0, b'/usr/bin/python3\n', b'')
+            return self.command(argv, **kwargs)
+        with patch.object(subject, 'Path', side_effect=lambda p: directory if p == '/proc' else real_path(p)), \
+             patch.object(subject.os, 'readlink', side_effect=denied), \
+             patch.object(subject.subprocess, 'run', side_effect=readonly) as command:
+            value = subject.cleanup(self.ctx)
+        self.assertTrue(value['passed'], value.get('guard_code')); self.assertFalse(self.ctx['root'].exists())
+        self.assertEqual(len([c for c in command.call_args_list if c.args[0][0] == '/usr/bin/sudo']), 2)
+        self.assertEqual(len([c for c in command.call_args_list if c.args[0][-1] == 'devices']), 1)
+        self.assertTrue(self.adb.exists()); self.assertTrue(value['no_stop_or_kill'])
 
     def test_exact_boot_bytes_reject_extra_or_private_data(self):
         for data in ((BOOT + '\n').encode(), (BOOT + '\nprivate').encode(), b'private'):

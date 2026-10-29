@@ -22,7 +22,8 @@ SDK_LAUNCH_INTENT SDK_LAUNCH_PID SDK_PROC_UNKNOWN SDK_PROC_IDENTITY SDK_PROC_LIM
 SDK_ADB_UNKNOWN SDK_AVD_PRESENT SDK_CLEANUP_DEADLINE SDK_CLEANUP_CLOCK
 SDK_SDK_PROCESS_PRESENT SDK_CLEANUP_OWNER SDK_ORIGINAL_PID_REUSED SDK_UNKNOWN_ACTION
 SDK_PROBE_IDENTITY SDK_COMMAND_UNKNOWN SDK_VERSION_UNAVAILABLE SDK_GLOBAL_TOOLS
-SDK_LICENSE SDK_REGISTERED_EMULATOR SDK_IMAGE_IDENTITY SDK_AVD_BINDING'''.split())
+SDK_LICENSE SDK_REGISTERED_EMULATOR SDK_IMAGE_IDENTITY SDK_AVD_BINDING
+SDK_PROC_PRIVILEGED_READ SDK_PROC_OWNER_CHANGED'''.split())
 
 
 def boot():
@@ -388,6 +389,40 @@ def proc(pid):
         return None
 
 
+def sdk_stat(path):
+    require(path.parent == Path('/proc') and path.name.isascii() and path.name.isdigit() and
+            str(int(path.name)) == path.name and 1 <= int(path.name) <= 4194304, 'SDK_PROC_IDENTITY')
+    before = path.stat()
+    raw = (path / 'stat').read_bytes()
+    require(len(raw) <= 4096 and raw.startswith((path.name + ' (').encode()) and b') ' in raw, 'SDK_PROC_IDENTITY')
+    fields = raw.rsplit(b') ', 1)[1].split()
+    require(len(fields) >= 20 and fields[0] in tuple(bytes([v]) for v in b'RSDZTtWXxKWPIN') and
+            fields[19].isdigit() and int(fields[19]) > 0, 'SDK_PROC_IDENTITY')
+    after = path.stat()
+    require((before.st_uid, before.st_dev, before.st_ino) == (after.st_uid, after.st_dev, after.st_ino),
+            'SDK_PROC_OWNER_CHANGED')
+    return before.st_uid, int(fields[19]), fields[0]
+
+
+def sdk_permission_readlink(ctx, path, identity):
+    """One read of a denied executable link; no permission, process or file writes."""
+    require(identity[0] == ctx['owner']['uid'] and sdk_stat(path)[:2] == identity[:2] and
+            boot() == ctx['owner']['host_boot_id'], 'SDK_PROC_OWNER_CHANGED')
+    command = ['/usr/bin/sudo', '-n', '--', '/usr/bin/readlink', '--', '/proc/' + path.name + '/exe']
+    started = time.monotonic()
+    value = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=1, check=False)
+    require(type(value.returncode) is int and value.returncode == 0 and value.stderr == b'' and
+            type(value.stdout) is bytes and 2 <= len(value.stdout) <= 4096 and value.stdout.endswith(b'\n') and
+            all(32 <= byte <= 126 for byte in value.stdout[:-1]), 'SDK_PROC_PRIVILEGED_READ')
+    text = value.stdout[:-1].decode('ascii')
+    posix = PurePosixPath(text)
+    require(posix.is_absolute() and not text.startswith('//') and '..' not in posix.parts and str(posix) == text,
+            'SDK_PROC_PRIVILEGED_READ')
+    require(sdk_stat(path)[:2] == identity[:2] and boot() == ctx['owner']['host_boot_id'], 'SDK_PROC_OWNER_CHANGED')
+    require(started <= time.monotonic() <= started + 1, 'SDK_PROC_PRIVILEGED_READ')
+    return text
+
+
 def sdk_processes(ctx):
     values = list(Path('/proc').iterdir())
     require(len(values) <= 8192, 'SDK_PROC_LIMIT')
@@ -396,7 +431,14 @@ def sdk_processes(ctx):
         if not path.name.isdigit(): continue
         try:
             if path.stat().st_uid != ctx['owner']['uid']: continue
-            executable = os.readlink(path / 'exe')
+            identity = sdk_stat(path)
+            require(identity[0] == ctx['owner']['uid'], 'SDK_PROC_OWNER_CHANGED')
+            if identity[2] == b'Z': continue
+            try:
+                executable = os.readlink(path / 'exe')
+            except PermissionError:
+                executable = sdk_permission_readlink(ctx, path, identity)
+            require(sdk_stat(path)[:2] == identity[:2], 'SDK_PROC_OWNER_CHANGED')
             if owns_executable(ctx, executable): found.append(int(path.name))
         except FileNotFoundError:
             if path.exists():
