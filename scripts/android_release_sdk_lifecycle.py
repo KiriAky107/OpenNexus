@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -16,6 +17,12 @@ require = kernel.require
 PREFIX = 'sdk-'
 SERIAL = 'emulator-5562'
 VERSION_SCOPE = 'One admitted original fixed SDK version prefix; other streams length/hash only'
+REGISTRY_CLASS = 'cc.kronecker.opennexus.sdkinternal.OwnedEmulatorRegistry'
+REGISTRY_MATCH = b'SDK_REGISTRY_SCHEMA_MATCH\n'
+REGISTRY_PROPERTIES = (b'Pkg.UserSrc=false\nPkg.Revision=37.2.12\nPkg.Path=emulator\n'
+                       b'Pkg.Desc=Android Emulator\nPkg.BuildId=16428233')
+REGISTRY_KEYS = ('owner', 'passed', 'properties', 'package_xml', 'created_here', 'tools', 'commands',
+                 'build_name', 'build_removed', 'SDKmanager_registered', 'runtime_verified')
 SAFE = kernel.SAFE_CODES | frozenset('''SDK_CONTEXT SDK_BOOT SDK_JSON SDK_FILE_ALIAS
 SDK_ORIGINAL_RECORD_EXISTS SDK_PREPARE_RESULT SDK_ROOT_OWNER SDK_LAUNCHER_CHANGED
 SDK_LAUNCH_INTENT SDK_LAUNCH_PID SDK_PROC_UNKNOWN SDK_PROC_IDENTITY SDK_PROC_LIMIT
@@ -23,7 +30,8 @@ SDK_ADB_UNKNOWN SDK_AVD_PRESENT SDK_CLEANUP_DEADLINE SDK_CLEANUP_CLOCK
 SDK_SDK_PROCESS_PRESENT SDK_CLEANUP_OWNER SDK_ORIGINAL_PID_REUSED SDK_UNKNOWN_ACTION
 SDK_PROBE_IDENTITY SDK_COMMAND_UNKNOWN SDK_VERSION_UNAVAILABLE SDK_GLOBAL_TOOLS
 SDK_LICENSE SDK_REGISTERED_EMULATOR SDK_IMAGE_IDENTITY SDK_AVD_BINDING
-SDK_PROC_PRIVILEGED_READ SDK_PROC_OWNER_CHANGED'''.split())
+SDK_PROC_PRIVILEGED_READ SDK_PROC_OWNER_CHANGED SDK_REGISTRY_TOOLS SDK_REGISTRY_SOURCE
+SDK_REGISTRY_CHANGED SDK_REGISTRY_COMMAND SDK_REGISTRY_BUILD_CLEANUP SDK_REGISTRY_NOT_READY'''.split())
 
 
 def boot():
@@ -212,12 +220,182 @@ def emulator_catalogue(raw):
                 catalogue_kind=next(iter(kinds)) if len(kinds) == 1 else 'none', installed_exactly_once=passed)
 
 
+def registry_tools(ctx):
+    home = Path(os.environ.get('JAVA_HOME', ''))
+    require(home.is_absolute() and '..' not in home.parts and home.is_dir() and home.resolve() == home,
+            'SDK_REGISTRY_TOOLS')
+    suffix = '.exe' if os.name == 'nt' else ''
+    paths = dict(java=home / ('bin/java' + suffix), javac=home / ('bin/javac' + suffix),
+                 classpath=ctx['sdk'] / 'cmdline-tools/latest/lib/avdmanager-classpath.jar',
+                 source=Path(__file__).resolve().parent / 'android-sdk-tools/OwnedEmulatorRegistry.java')
+    return {name: dict(path=str(path), **fingerprint(path)) for name, path in paths.items()}
+
+
+def registry_snapshot(ctx, tools, expected_xml):
+    prepared(ctx)
+    require(boot() == ctx['owner']['host_boot_id'] and registry_tools(ctx) == tools, 'SDK_REGISTRY_CHANGED')
+    directory = ctx['root'] / 'runtime/emulator'
+    require(raw_file(directory / 'source.properties', 104) == REGISTRY_PROPERTIES, 'SDK_REGISTRY_SOURCE')
+    path = directory / 'package.xml'
+    if expected_xml is None:
+        require(not path.exists() and not path.is_symlink(), 'SDK_REGISTRY_CHANGED')
+    else:
+        require(raw_file(path) == expected_xml, 'SDK_REGISTRY_CHANGED')
+
+
+def register_owned(ctx):
+    prepared(ctx)
+    require(not list(ctx['evidence'].glob('sdk-registry-*.json')), 'SDK_ORIGINAL_RECORD_EXISTS')
+    properties = dict(bytes=len(REGISTRY_PROPERTIES), sha256=hashlib.sha256(REGISTRY_PROPERTIES).hexdigest())
+    emit(ctx, 'registry-intent', dict(owner=ctx['owner'], properties=properties,
+         package_relative='runtime/emulator/package.xml', automatic_retry=False))
+    result = dict(owner=ctx['owner'], passed=False, properties=properties, package_xml=None,
+                  created_here=False, tools={}, commands=[], build_name=None, build_removed=True,
+                  SDKmanager_registered=False, runtime_verified=False)
+    build = None
+    try:
+        directory = ctx['root'] / 'runtime/emulator'
+        require(raw_file(directory / 'source.properties', 104) == REGISTRY_PROPERTIES, 'SDK_REGISTRY_SOURCE')
+        target = directory / 'package.xml'
+        xml = raw_file(target) if target.exists() or target.is_symlink() else None
+        if xml is not None: result['package_xml'] = dict(bytes=len(xml), sha256=hashlib.sha256(xml).hexdigest())
+        tools = registry_tools(ctx); result['tools'] = tools
+        registry_snapshot(ctx, tools, xml)
+        parent = ctx['parent']; parent_stat = parent.stat()
+        parent_identity = (parent_stat.st_dev, parent_stat.st_ino)
+        build = Path(tempfile.mkdtemp(prefix='sdk-registry-build-', dir=parent))
+        build_stat = build.stat(); build_identity = (build_stat.st_dev, build_stat.st_ino)
+        result.update(build_name=build.name, build_removed=False)
+        require(build.parent == parent and build.resolve() == build and not build.is_symlink(), 'SDK_REGISTRY_BUILD_CLEANUP')
+
+        def invoke(argv, data=None):
+            registry_snapshot(ctx, tools, xml)
+            number = len(result['commands']) + 1
+            input_meta = dict(stdin_bytes=len(data or b''), stdin_sha256=hashlib.sha256(data or b'').hexdigest())
+            emit(ctx, 'registry-command-' + str(number) + '-intent',
+                 dict(owner=ctx['owner'], argv=argv, automatic_retry=False, **input_meta))
+            registry_snapshot(ctx, tools, xml)
+            record = dict(argv=argv, attempted=True, returncode=None, **input_meta)
+            result['commands'].append(record)
+            options = dict(capture_output=True, timeout=40, check=False)
+            if data is None: options['stdin'] = subprocess.DEVNULL
+            else: options['input'] = data
+            value = subprocess.run(argv, **options)
+            record.update(returncode=value.returncode, stdout_bytes=len(value.stdout),
+                          stdout_sha256=hashlib.sha256(value.stdout).hexdigest(), stderr_bytes=len(value.stderr),
+                          stderr_sha256=hashlib.sha256(value.stderr).hexdigest())
+            require(value.returncode == 0 and len(value.stdout) <= 65536 and len(value.stderr) <= 65536,
+                    'SDK_REGISTRY_COMMAND')
+            registry_snapshot(ctx, tools, xml)
+            return value
+
+        compile_argv = [tools['javac']['path'], '-J-Xmx128m', '-encoding', 'UTF-8', '-classpath',
+                        tools['classpath']['path'], '-d', str(build), tools['source']['path']]
+        invoke(compile_argv)
+        class_file = build.joinpath(*REGISTRY_CLASS.split('.')).with_suffix('.class')
+        require(bool(raw_file(class_file, 1024 ** 2)), 'SDK_REGISTRY_COMMAND')
+        launch = [tools['java']['path'], '-Xmx64m', '-cp', str(build) + os.pathsep + tools['classpath']['path'], REGISTRY_CLASS]
+        if xml is None:
+            derived = invoke(launch + ['derive'], REGISTRY_PROPERTIES)
+            require(derived.stderr == b'' and 0 < len(derived.stdout) <= 65536, 'SDK_REGISTRY_COMMAND')
+            data = derived.stdout
+            emit(ctx, 'registry-write-intent', dict(owner=ctx['owner'], package_relative='runtime/emulator/package.xml',
+                 original_absent=True, bytes=len(data), sha256=hashlib.sha256(data).hexdigest(), automatic_retry=False))
+            registry_snapshot(ctx, tools, None)
+            with target.open('xb') as output:
+                result['created_here'] = True
+                output.write(data); output.flush(); os.fsync(output.fileno())
+            xml = data
+        result['package_xml'] = dict(bytes=len(xml), sha256=hashlib.sha256(xml).hexdigest())
+        registry_snapshot(ctx, tools, xml)
+        validated = invoke(launch + ['validate'], raw_file(target))
+        require(validated.stdout == REGISTRY_MATCH and validated.stderr == b'', 'SDK_REGISTRY_COMMAND')
+        registry_snapshot(ctx, tools, xml)
+        result['passed'] = True
+    except Exception as error:
+        result['guard_code'] = str(error) if type(error) is kernel.ArchiveError and str(error) in SAFE else 'SDK_REGISTRY_UNAVAILABLE'
+        result['error_kind'] = type(error).__name__ if type(error) in (
+            kernel.ArchiveError, subprocess.TimeoutExpired, PermissionError, FileNotFoundError, FileExistsError) else 'unclassified'
+    finally:
+        if build is not None:
+            try:
+                require(parent.resolve() == parent and not parent.is_symlink() and
+                        (parent.stat().st_dev, parent.stat().st_ino) == parent_identity and
+                        build.parent == parent and build.resolve() == build and not build.is_symlink() and
+                        (build.stat().st_dev, build.stat().st_ino) == build_identity, 'SDK_REGISTRY_BUILD_CLEANUP')
+                shutil.rmtree(build)
+                require(not build.exists() and not build.is_symlink(), 'SDK_REGISTRY_BUILD_CLEANUP')
+                result['build_removed'] = True
+            except Exception:
+                result['passed'] = False
+                result.setdefault('guard_code', 'SDK_REGISTRY_BUILD_CLEANUP')
+                result['build_cleanup_unknown'] = True
+    emit(ctx, 'registry-result', result)
+    return result
+
+
+def registry_ready(ctx):
+    value = read(ctx, 'registry-result', REGISTRY_KEYS)
+    require(value['passed'] is True and value['build_removed'] is True and
+            value['SDKmanager_registered'] is False and value['runtime_verified'] is False and
+            type(value['created_here']) is bool, 'SDK_REGISTRY_NOT_READY')
+    xml = raw_file(ctx['root'] / 'runtime/emulator/package.xml')
+    require(value['properties'] == dict(bytes=len(REGISTRY_PROPERTIES), sha256=hashlib.sha256(REGISTRY_PROPERTIES).hexdigest())
+            and value['package_xml'] == dict(bytes=len(xml), sha256=hashlib.sha256(xml).hexdigest()), 'SDK_REGISTRY_CHANGED')
+    registry_snapshot(ctx, value['tools'], xml)
+    require(type(value['build_name']) is str and re.fullmatch(r'sdk-registry-build-[a-z0-9_]{8}', value['build_name']),
+            'SDK_REGISTRY_NOT_READY')
+    build = ctx['parent'] / value['build_name']
+    require(not build.exists() and not build.is_symlink(), 'SDK_REGISTRY_BUILD_CLEANUP')
+    intent = read(ctx, 'registry-intent', ('owner', 'properties', 'package_relative', 'automatic_retry'))
+    require(intent['properties'] == value['properties'] and intent['package_relative'] == 'runtime/emulator/package.xml'
+            and intent['automatic_retry'] is False, 'SDK_REGISTRY_NOT_READY')
+    tools = value['tools']
+    launch = [tools['java']['path'], '-Xmx64m', '-cp', str(build) + os.pathsep + tools['classpath']['path'], REGISTRY_CLASS]
+    plans = [([tools['javac']['path'], '-J-Xmx128m', '-encoding', 'UTF-8', '-classpath', tools['classpath']['path'],
+               '-d', str(build), tools['source']['path']], b'')]
+    if value['created_here']:
+        plans.append((launch + ['derive'], REGISTRY_PROPERTIES))
+        write = read(ctx, 'registry-write-intent', ('owner', 'package_relative', 'original_absent', 'bytes', 'sha256', 'automatic_retry'))
+        require(write['package_relative'] == 'runtime/emulator/package.xml' and write['original_absent'] is True and
+                write['automatic_retry'] is False and dict(bytes=write['bytes'], sha256=write['sha256']) == value['package_xml'],
+                'SDK_REGISTRY_NOT_READY')
+    else:
+        require(not (ctx['evidence'] / 'sdk-registry-write-intent.json').exists(), 'SDK_REGISTRY_NOT_READY')
+    plans.append((launch + ['validate'], xml))
+    require(type(value['commands']) is list and len(value['commands']) == len(plans), 'SDK_REGISTRY_NOT_READY')
+    for index, (record, (argv, data)) in enumerate(zip(value['commands'], plans), 1):
+        expected_input = dict(stdin_bytes=len(data), stdin_sha256=hashlib.sha256(data).hexdigest())
+        require(type(record) is dict and set(record) == {'argv', 'attempted', 'returncode', 'stdin_bytes', 'stdin_sha256',
+                'stdout_bytes', 'stdout_sha256', 'stderr_bytes', 'stderr_sha256'} and record['argv'] == argv and
+                record['attempted'] is True and type(record['returncode']) is int and record['returncode'] == 0 and
+                type(record['stdin_bytes']) is int and
+                all(record[k] == v for k, v in expected_input.items()), 'SDK_REGISTRY_NOT_READY')
+        original = read(ctx, 'registry-command-' + str(index) + '-intent',
+                        ('owner', 'argv', 'automatic_retry', 'stdin_bytes', 'stdin_sha256'))
+        require(original['argv'] == argv and original['automatic_retry'] is False and
+                type(original['stdin_bytes']) is int and
+                all(original[k] == v for k, v in expected_input.items()), 'SDK_REGISTRY_NOT_READY')
+        for channel in ('stdout', 'stderr'):
+            require(type(record[channel + '_bytes']) is int and 0 <= record[channel + '_bytes'] <= 65536 and
+                    re.fullmatch(r'[0-9a-f]{64}', record[channel + '_sha256']), 'SDK_REGISTRY_NOT_READY')
+        if argv[-1] in ('derive', 'validate'):
+            output = xml if argv[-1] == 'derive' else REGISTRY_MATCH
+            require(record['stdout_bytes'] == len(output) and record['stdout_sha256'] == hashlib.sha256(output).hexdigest()
+                    and record['stderr_bytes'] == 0 and record['stderr_sha256'] == hashlib.sha256(b'').hexdigest(),
+                    'SDK_REGISTRY_NOT_READY')
+    return value
+
+
 def image_ready(ctx):
     prepared(ctx)
     value = read(ctx, 'image-result', ('owner', 'passed', 'commands', 'image_properties',
-                                      'emulator_registered_version', 'emulator_catalogue', 'licenses', 'runtime_verified'))
+                                      'emulator_registered_version', 'emulator_catalogue', 'registry_sha256', 'licenses', 'runtime_verified'))
     require(value['passed'] is True and value['runtime_verified'] is False and
             value['emulator_registered_version'] == kernel.FIXED['version'], 'SDK_IMAGE_IDENTITY')
+    registry_ready(ctx)
+    require(value['registry_sha256'] == hashlib.sha256(raw_file(ctx['evidence'] / 'sdk-registry-result.json')).hexdigest(),
+            'SDK_REGISTRY_NOT_READY')
     catalogue = value['emulator_catalogue']
     require(type(catalogue) is dict and set(catalogue) == {'plain_ascii', 'installed_sections', 'available_sections',
             'emulator_candidate_rows', 'matching_rows', 'catalogue_kind', 'installed_exactly_once'} and
@@ -288,8 +466,12 @@ def install_image(ctx):
                 [str(manager), '--sdk_root=' + str(private), '--install', 'system-images;android-36;google_apis;x86_64']]
     emit(ctx, 'image-intent', dict(owner=ctx['owner'], argv=commands, automatic_retry=False))
     result = dict(owner=ctx['owner'], passed=False, commands=[], image_properties=None,
-                  emulator_registered_version=None, emulator_catalogue=None, licenses={}, runtime_verified=False)
+                  emulator_registered_version=None, emulator_catalogue=None, registry_sha256=None, licenses={}, runtime_verified=False)
     try:
+        registered = register_owned(ctx)
+        require(registered['passed'], 'SDK_REGISTRY_NOT_READY')
+        registry_ready(ctx)
+        result['registry_sha256'] = hashlib.sha256(raw_file(ctx['evidence'] / 'sdk-registry-result.json')).hexdigest()
         licenses = private / 'licenses'
         require(not licenses.exists() and not licenses.is_symlink(), 'SDK_LICENSE')
         licenses.mkdir()
@@ -303,6 +485,7 @@ def install_image(ctx):
             result['licenses'][name] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
         for index, command in enumerate(commands):
             prepared(ctx)
+            registry_ready(ctx)
             record = dict(argv=command, attempted=True, returncode=None); result['commands'].append(record)
             completed = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=900, check=False)
             record.update(returncode=completed.returncode, stdout_bytes=len(completed.stdout),
@@ -315,6 +498,7 @@ def install_image(ctx):
                 require(result['emulator_catalogue']['installed_exactly_once'], 'SDK_REGISTERED_EMULATOR')
                 result['emulator_registered_version'] = kernel.FIXED['version']
             prepared(ctx)
+            registry_ready(ctx)
         image = private / 'system-images/android-36/google_apis/x86_64'
         data = raw_file(image / 'source.properties', 16384)
         properties = {}

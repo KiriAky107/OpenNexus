@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPORARIES = []
 BOOT = '12345678-1234-4234-8234-123456789abc'
 BOOT_READER = subject.boot
+REGISTRY_FIXTURE_XML = (b'<ns2:repository xmlns:ns2="http://schemas.android.com/repository/android/common/02" '
+    b'xmlns:g="http://schemas.android.com/repository/android/generic/02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+    b'<localPackage path="emulator" obsolete="false"><type-details xsi:type="g:genericDetailsType"/>'
+    b'<revision><major>37</major><minor>2</minor><micro>12</micro></revision><display-name>Android Emulator</display-name>'
+    b'</localPackage></ns2:repository>')
 
 
 class Response(io.BytesIO):
@@ -41,11 +46,18 @@ class SDKLifecycle(unittest.TestCase):
                      'cmdline-tools/latest/bin/sdkmanager', 'cmdline-tools/latest/bin/avdmanager'):
             path = sdk / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'fixture, not executable')
         (sdk / 'licenses').mkdir(); (sdk / 'licenses/android-sdk-license').write_bytes(b'\n' + b'a' * 40 + b'\n')
+        classpath = sdk / 'cmdline-tools/latest/lib/avdmanager-classpath.jar'
+        classpath.parent.mkdir(parents=True); classpath.write_bytes(b'controlled vendor classpath fixture')
+        self.jdk = self.workspace / 'jdk'
+        for name in ('java', 'javac'):
+            path = self.jdk / ('bin/' + name + ('.exe' if os.name == 'nt' else ''))
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'controlled tool, never executed')
+        self.accepted_registry_xml = {REGISTRY_FIXTURE_XML}
         self.addCleanup(patch.stopall)
         patch.dict(subject.os.environ, GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Linux',
                    RUNTIME_SCENE='sync-timeout', GITHUB_RUN_ID='123456', GITHUB_RUN_ATTEMPT='1', GITHUB_SHA='a' * 40,
                    GITHUB_WORKSPACE=str(self.workspace), ANDROID_HOME=str(sdk), ANDROID_AVD_HOME=str(self.parent / 'avd'),
-                   ANDROID_EMULATOR_HOME=str(self.parent / 'emulator-home')).start()
+                   ANDROID_EMULATOR_HOME=str(self.parent / 'emulator-home'), JAVA_HOME=str(self.jdk)).start()
         patch.object(subject.sys, 'platform', 'linux').start()
         patch.object(subject.os, 'getuid', return_value=self.workspace.stat().st_uid, create=True).start()
         patch.object(subject, 'boot', return_value=BOOT).start()
@@ -55,7 +67,7 @@ class SDKLifecycle(unittest.TestCase):
             entry = zipfile.ZipInfo('emulator/emulator'); entry.create_system = 3
             entry.external_attr = (stat.S_IFREG | 0o755) << 16
             archive.writestr(entry, b'\x7fELF\x02\x01\x01' + bytes(11) + b'\x3e\x00')
-            archive.writestr('emulator/source.properties', b'Pkg.Revision=37.2.12\n')
+            archive.writestr('emulator/source.properties', subject.REGISTRY_PROPERTIES)
         self.archive = output.getvalue(); end = self.archive.rfind(b'PK\x05\x06')
         fields = struct.unpack_from('<4s4H2LH', self.archive, end)
         with zipfile.ZipFile(io.BytesIO(self.archive)) as bundle: expanded = sum(x.file_size for x in bundle.infolist())
@@ -68,6 +80,19 @@ class SDKLifecycle(unittest.TestCase):
 
     def command(self, argv, **kwargs):
         self.commands.append(argv)
+        if Path(argv[0]).name in ('javac', 'javac.exe'):
+            self.assertEqual(argv[1:4], ['-J-Xmx128m', '-encoding', 'UTF-8'])
+            output = Path(argv[argv.index('-d') + 1]).joinpath(*subject.REGISTRY_CLASS.split('.')).with_suffix('.class')
+            output.parent.mkdir(parents=True); output.write_bytes(b'controlled class, never executed')
+            return subprocess.CompletedProcess(argv, 0, b'', b'')
+        if Path(argv[0]).name in ('java', 'java.exe'):
+            self.assertEqual(argv[1], '-Xmx64m'); self.assertEqual(argv[-2], subject.REGISTRY_CLASS)
+            data = kwargs['input']
+            if argv[-1] == 'derive' and data == subject.REGISTRY_PROPERTIES:
+                return subprocess.CompletedProcess(argv, 0, REGISTRY_FIXTURE_XML, b'')
+            if argv[-1] == 'validate' and data in self.accepted_registry_xml:
+                return subprocess.CompletedProcess(argv, 0, subject.REGISTRY_MATCH, b'')
+            return subprocess.CompletedProcess(argv, 1, b'', b'SDK_REGISTRY_VENDOR_GUARD\n')
         if argv[0].endswith('sdkmanager'):
             self.assertEqual(argv[1], '--sdk_root=' + str(self.ctx['root'] / 'runtime'))
             self.assertIs(kwargs['stdin'], subprocess.DEVNULL)
@@ -231,6 +256,7 @@ class SDKLifecycle(unittest.TestCase):
     def test_missing_registered_emulator_never_attempts_a_second_emulator_download(self):
         subject.prepare(self.ctx); commands = []
         def absent(argv, **kwargs):
+            if not argv[0].endswith('sdkmanager'): return self.command(argv, **kwargs)
             commands.append(argv)
             return subprocess.CompletedProcess(argv, 0, b'Installed packages:\nPath | Version | Description | Location\n', b'')
         with patch.object(subject.subprocess, 'run', side_effect=absent): value = subject.install_image(self.ctx)
