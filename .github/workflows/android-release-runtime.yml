@@ -108,6 +108,8 @@ jobs:
           fi
       - name: Prepare only this hosted emulator
         shell: bash
+        env:
+          RUNTIME_SCENE: ${{ inputs.scene }}
         run: |
           set -euo pipefail
           test "$GITHUB_ACTIONS" = true
@@ -118,7 +120,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends libpulse0
           manager="$ANDROID_HOME/cmdline-tools/latest/bin"
-          if [[ -x "$manager/android" ]]; then
+          launcher="$ANDROID_HOME/emulator/emulator"
+          if [[ "$RUNTIME_SCENE" == sync-timeout ]]; then
+            python3 scripts/android_release_sdk_lifecycle.py prepare
+            python3 scripts/android_release_sdk_lifecycle.py install-image
+          elif [[ -x "$manager/android" ]]; then
             for package in platforms/android-36 build-tools/36.0.0 platform-tools emulator system-images/android-36/google_apis/x86_64; do
               "$manager/android" --no-metrics --sdk="$ANDROID_HOME" sdk --ignore-outdated-xmls install "$package"
             done
@@ -127,13 +133,30 @@ jobs:
           fi
           test -c /dev/kvm
           sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          if [[ "$RUNTIME_SCENE" == sync-timeout ]]; then
+            launcher="$(python3 scripts/android_release_sdk_lifecycle.py select-launcher)"
+          fi
           # Use the official launcher, which configures its bundled library paths.
           # Running ldd directly on QEMU incorrectly reports bundled Qt/emu libraries missing.
-          "$ANDROID_HOME/emulator/emulator" -version > .build/android-release-runtime/emulator-version.txt 2>&1
-          "$ANDROID_HOME/emulator/emulator" -accel-check
-          printf 'no\n' | "$manager/avdmanager" create avd --name "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --package 'system-images;android-36;google_apis;x86_64' --device pixel_7
-          "$ANDROID_HOME/emulator/emulator" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-release-runtime/emulator.log 2>&1 &
+          if [[ "$RUNTIME_SCENE" == sync-timeout ]]; then
+            python3 scripts/android_release_sdk_lifecycle.py probe-version-and-accel
+          else
+            "$launcher" -version > .build/android-release-runtime/emulator-version.txt 2>&1
+            "$launcher" -accel-check
+          fi
+          if [[ "$RUNTIME_SCENE" == sync-timeout ]]; then
+            sdk_root="$(python3 scripts/android_release_sdk_lifecycle.py image-root)"
+            printf 'no\n' | env ANDROID_HOME="$sdk_root" ANDROID_SDK_ROOT="$sdk_root" "$manager/avdmanager" create avd --name "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --package 'system-images;android-36;google_apis;x86_64' --device pixel_7
+            python3 scripts/android_release_sdk_lifecycle.py bind-avd
+            ANDROID_HOME="$sdk_root" ANDROID_SDK_ROOT="$sdk_root" "$launcher" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-release-runtime/emulator.log 2>&1 &
+          else
+            printf 'no\n' | "$manager/avdmanager" create avd --name "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --package 'system-images;android-36;google_apis;x86_64' --device pixel_7
+            "$launcher" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-release-runtime/emulator.log 2>&1 &
+          fi
           echo "$!" > .build/android-release-runtime/emulator.pid
+          if [[ "$RUNTIME_SCENE" == sync-timeout ]]; then
+            python3 scripts/android_release_sdk_lifecycle.py observe-launch
+          fi
       - name: Recheck actual signed binaries and update without clear data
         if: inputs.scene == 'upgrade'
         run: >-
@@ -228,6 +251,11 @@ jobs:
         run: |
           mkdir -p .build/android-release-runtime
           python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned > .build/android-release-runtime/cleanup.json
+      - name: Remove only the verified timeout SDK after actual AVD absence
+        if: always() && inputs.scene == 'sync-timeout'
+        env:
+          RUNTIME_SCENE: ${{ inputs.scene }}
+        run: python3 scripts/android_release_sdk_lifecycle.py cleanup
       - uses: actions/upload-artifact@v7
         if: always()
         with:
