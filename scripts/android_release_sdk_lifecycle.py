@@ -221,14 +221,30 @@ def emulator_catalogue(raw):
 
 
 def registry_tools(ctx):
-    home = Path(os.environ.get('JAVA_HOME', ''))
-    require(home.is_absolute() and '..' not in home.parts and home.is_dir() and home.resolve() == home,
+    reference = os.environ.get('JAVA_HOME', '')
+    home = Path(reference)
+    require(home.is_absolute() and '..' not in home.parts and home.is_dir(),
             'SDK_REGISTRY_TOOLS')
+    # setup-java exports a tool-cache reference. Bind it and its physical JDK;
+    # only read-only tool discovery resolves references, never output paths.
+    def identity(value):
+        return [value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_mtime_ns]
+    reference_identity = identity(home.lstat())
+    resolved = home.resolve(strict=True)
+    require(resolved.is_dir() and not resolved.is_symlink() and resolved.resolve() == resolved,
+            'SDK_REGISTRY_TOOLS')
+    target_identity = identity(resolved.stat())
     suffix = '.exe' if os.name == 'nt' else ''
-    paths = dict(java=home / ('bin/java' + suffix), javac=home / ('bin/javac' + suffix),
+    paths = dict(java=resolved / ('bin/java' + suffix), javac=resolved / ('bin/javac' + suffix),
                  classpath=ctx['sdk'] / 'cmdline-tools/latest/lib/avdmanager-classpath.jar',
                  source=Path(__file__).resolve().parent / 'android-sdk-tools/OwnedEmulatorRegistry.java')
-    return {name: dict(path=str(path), **fingerprint(path)) for name, path in paths.items()}
+    tools = {name: dict(path=str(path), **fingerprint(path)) for name, path in paths.items()}
+    require(os.environ.get('JAVA_HOME', '') == reference and identity(home.lstat()) == reference_identity
+            and home.resolve(strict=True) == resolved and identity(resolved.stat()) == target_identity,
+            'SDK_REGISTRY_CHANGED')
+    tools['java_home'] = dict(reference=reference, reference_identity=reference_identity,
+                              resolved=str(resolved), target_identity=target_identity)
+    return tools
 
 
 def registry_snapshot(ctx, tools, expected_xml):
