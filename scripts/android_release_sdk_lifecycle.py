@@ -31,7 +31,8 @@ SDK_SDK_PROCESS_PRESENT SDK_CLEANUP_OWNER SDK_ORIGINAL_PID_REUSED SDK_UNKNOWN_AC
 SDK_PROBE_IDENTITY SDK_COMMAND_UNKNOWN SDK_VERSION_UNAVAILABLE SDK_GLOBAL_TOOLS
 SDK_LICENSE SDK_REGISTERED_EMULATOR SDK_IMAGE_IDENTITY SDK_AVD_BINDING
 SDK_PROC_PRIVILEGED_READ SDK_PROC_OWNER_CHANGED SDK_REGISTRY_TOOLS SDK_REGISTRY_SOURCE
-SDK_REGISTRY_CHANGED SDK_REGISTRY_COMMAND SDK_REGISTRY_BUILD_CLEANUP SDK_REGISTRY_NOT_READY'''.split())
+SDK_REGISTRY_CHANGED SDK_REGISTRY_COMMAND SDK_REGISTRY_BUILD_CLEANUP SDK_REGISTRY_NOT_READY
+SDK_AVD_CONTEXT SDK_AVD_COMMAND SDK_AVD_ALREADY_EXISTS'''.split())
 
 
 def boot():
@@ -474,6 +475,82 @@ def bind_avd(ctx):
     return value
 
 
+def create_avd(ctx):
+    """One original vendor CLI call with an explicit owned SDK lookup context."""
+    image_ready(ctx); validate_probe(ctx)
+    tools = registry_ready(ctx)['tools']
+    name = 'opennexus-ci-' + ctx['owner']['GITHUB_RUN_ID'] + '-' + ctx['owner']['GITHUB_RUN_ATTEMPT']
+    avd = ctx['parent'] / 'avd' / (name + '.avd')
+    locator = avd.with_suffix('.ini')
+    private = ctx['root'] / 'runtime'
+    descriptor = private / 'cmdline-tools/avd-root-context'
+    lineage = {key: hashlib.sha256(raw_file(ctx['evidence'] / ('sdk-' + key + '.json'))).hexdigest()
+               for key in ('registry-result', 'image-result', 'probe-result')}
+    argv = [tools['java']['path'], '-Xmx128m', '-Dcom.android.sdkmanager.toolsdir=' + str(descriptor),
+            '-cp', tools['classpath']['path'], 'com.android.sdklib.tool.AvdManagerCli',
+            'create', 'avd', '--name', name, '--package', 'system-images;android-36;google_apis;x86_64',
+            '--device', 'pixel_7']
+    require(not list(ctx['evidence'].glob('sdk-avd-create-*.json')), 'SDK_ORIGINAL_RECORD_EXISTS')
+    emit(ctx, 'avd-create-intent', dict(owner=ctx['owner'], argv=argv, lineage=lineage,
+         descriptor_relative='runtime/cmdline-tools/avd-root-context', automatic_retry=False))
+    result = dict(owner=ctx['owner'], passed=False, command=None, binding=None, locator_sha256=None,
+                  lineage=lineage, runtime_verified=False, no_automatic_retry=True)
+    descriptor_identity = None
+    try:
+        def guard(*, missing):
+            image_ready(ctx); validate_probe(ctx)
+            require(registry_tools(ctx) == tools and boot() == ctx['owner']['host_boot_id'], 'SDK_AVD_CONTEXT')
+            for key, digest in lineage.items():
+                require(hashlib.sha256(raw_file(ctx['evidence'] / ('sdk-' + key + '.json'))).hexdigest() == digest,
+                        'SDK_AVD_CONTEXT')
+            if descriptor_identity is not None:
+                require(descriptor.is_dir() and not descriptor.is_symlink() and descriptor.resolve() == descriptor and
+                        (descriptor.stat().st_dev, descriptor.stat().st_ino) == descriptor_identity, 'SDK_AVD_CONTEXT')
+            if missing:
+                require(all(not path.exists() and not path.is_symlink() for path in (avd, locator)), 'SDK_AVD_ALREADY_EXISTS')
+        guard(missing=True)
+        parent = descriptor.parent
+        if parent.exists():
+            require(parent.is_dir() and not parent.is_symlink() and parent.resolve() == parent, 'SDK_AVD_CONTEXT')
+        else: parent.mkdir()
+        require(not descriptor.exists() and not descriptor.is_symlink(), 'SDK_AVD_CONTEXT')
+        descriptor.mkdir()
+        descriptor_identity = (descriptor.stat().st_dev, descriptor.stat().st_ino)
+        guard(missing=True)
+        # This directory is a lookup anchor, not a copied/registered cmdline-tools package.
+        # Vendor init() resolves its grandparent as SDK root; the global classpath stays read-only.
+        emit(ctx, 'avd-create-command-intent', dict(owner=ctx['owner'], argv=argv,
+             stdin_bytes=3, stdin_sha256=hashlib.sha256(b'no\n').hexdigest(), automatic_retry=False))
+        guard(missing=True)
+        emit(ctx, 'avd-create-command-attempt', dict(owner=ctx['owner'], argv=argv, attempted=True))
+        guard(missing=True)
+        record = dict(argv=argv, attempted=True, returncode=None)
+        result['command'] = record
+        env = dict(os.environ, ANDROID_HOME=str(private), ANDROID_SDK_ROOT=str(private))
+        completed = subprocess.run(argv, input=b'no\n', env=env, capture_output=True, timeout=120, check=False)
+        record.update(returncode=completed.returncode, stdout_bytes=len(completed.stdout),
+                      stdout_sha256=hashlib.sha256(completed.stdout).hexdigest(), stderr_bytes=len(completed.stderr),
+                      stderr_sha256=hashlib.sha256(completed.stderr).hexdigest())
+        require(type(completed.returncode) is int and completed.returncode == 0 and
+                len(completed.stdout) <= 4 * 1024 ** 2 and len(completed.stderr) <= 4 * 1024 ** 2, 'SDK_AVD_COMMAND')
+        guard(missing=False)
+        original = raw_file(locator)
+        paths = [line.split('=', 1)[1] for line in original.decode('ascii').splitlines() if line.startswith('path=')]
+        require(paths == [str(avd)] and avd.is_dir() and not avd.is_symlink() and avd.resolve() == avd, 'SDK_AVD_CONTEXT')
+        result['binding'] = bind_avd(ctx)
+        result['locator_sha256'] = hashlib.sha256(original).hexdigest()
+        guard(missing=False)
+        require(raw_file(locator) == original, 'SDK_AVD_CONTEXT')
+        result['passed'] = True
+    except Exception as error:
+        result['guard_code'] = str(error) if type(error) is kernel.ArchiveError and str(error) in SAFE else 'SDK_AVD_COMMAND'
+        result['error_kind'] = {kernel.ArchiveError: 'sequence_guard', subprocess.TimeoutExpired: 'timeout',
+            PermissionError: 'permission_denied', FileExistsError: 'file_exists', FileNotFoundError: 'file_missing',
+            OSError: 'io'}.get(type(error), 'unclassified')
+    emit(ctx, 'avd-create-result', result)
+    return result
+
+
 def install_image(ctx):
     prepared(ctx)
     private = ctx['root'] / 'runtime'
@@ -770,7 +847,8 @@ def cleanup(ctx):
 def main(argv=None):
     actions = {'prepare': prepare, 'select-launcher': select_launcher, 'probe-version-and-accel': probe,
                'observe-launch': observe, 'cleanup': cleanup, 'install-image': install_image,
-               'image-root': lambda ctx: (image_ready(ctx), str(ctx['root'] / 'runtime'))[1], 'bind-avd': bind_avd}
+               'image-root': lambda ctx: (image_ready(ctx), str(ctx['root'] / 'runtime'))[1], 'bind-avd': bind_avd,
+               'create-avd': create_avd}
     args = sys.argv[1:] if argv is None else argv
     require(len(args) == 1 and args[0] in actions, 'SDK_UNKNOWN_ACTION')
     ctx = context()
