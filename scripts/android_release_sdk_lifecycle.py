@@ -819,6 +819,47 @@ def owns_dependency_executable(ctx, value):
            path.is_relative_to(ctx['root'] / 'runtime' / package) for package in layout.PACKAGES)
 
 
+def avd_config_facts(ctx, data):
+    """Only fixed booleans and hashes from the existing read, never config text or paths."""
+    require(type(data) is bytes and len(data) <= 65536, 'SDK_AVD_BINDING')
+    values = {key: [] for key in ('image.sysdir.1', 'abi.type', 'tag.id')}
+    try:
+        for line in data.decode('ascii').splitlines():
+            if '=' in line:
+                key, value = line.split('=', 1)
+                if key in values: values[key].append(value)
+        ascii_only = True
+    except UnicodeDecodeError:
+        ascii_only = False; values = {key: [] for key in values}
+    image = 'system-images/android-36/google_apis/x86_64'
+    admitted = (image, image + '/', str(ctx['root'] / 'runtime').replace('\\', '/') + '/' + image,
+                str(ctx['root'] / 'runtime').replace('\\', '/') + '/' + image + '/')
+    return dict(config_bytes=len(data), observed_config_sha256=hashlib.sha256(data).hexdigest(),
+                config_ascii=ascii_only, selected_keys_unique=all(len(v) == 1 for v in values.values()),
+                image_sysdir_literal_matches=len(values['image.sysdir.1']) == 1 and values['image.sysdir.1'][0] in admitted,
+                abi_x86_64=values['abi.type'] == ['x86_64'], tag_google_apis=values['tag.id'] == ['google_apis'])
+
+
+def record_avd_binding_failure(ctx, binding, image, avd, observed):
+    expected = binding['config_sha256']
+    require(type(expected) is str and re.fullmatch(r'[0-9a-f]{64}', expected), 'SDK_AVD_BINDING')
+    keys = {'config_bytes', 'observed_config_sha256', 'config_ascii', 'selected_keys_unique',
+            'image_sysdir_literal_matches', 'abi_x86_64', 'tag_google_apis'}
+    if observed is not None:
+        require(type(observed) is dict and set(observed) == keys and type(observed['config_bytes']) is int and
+                0 <= observed['config_bytes'] <= 65536 and type(observed['observed_config_sha256']) is str and
+                re.fullmatch(r'[0-9a-f]{64}', observed['observed_config_sha256']) and
+                all(type(observed[k]) is bool for k in keys - {'config_bytes', 'observed_config_sha256'}),
+                'SDK_AVD_BINDING')
+    facts = dict(binding_name_matches=binding['avd'] == avd, binding_runtime_false=binding['runtime_verified'] is False,
+                 binding_image_matches=binding['image_properties_sha256'] == image['image_properties']['sha256'],
+                 expected_config_sha256=expected, config_read=observed is not None,
+                 config_hash_matches=None if observed is None else observed['observed_config_sha256'] == expected)
+    facts.update({key: None for key in keys} if observed is None else observed)
+    emit(ctx, 'avd-binding-failure', dict(owner=ctx['owner'], stage='observe-launch-binding',
+         guard_code='SDK_AVD_BINDING', facts=facts, whole_passed=False, runtime_verified=False))
+
+
 def observe(ctx):
     observed_path = ctx['evidence'] / 'sdk-launch-observed.json'
     require(not observed_path.exists() and not observed_path.is_symlink(), 'SDK_ORIGINAL_RECORD_EXISTS')
@@ -827,10 +868,21 @@ def observe(ctx):
     image = image_ready(ctx)
     binding = read(ctx, 'avd-binding', ('owner', 'avd', 'config_sha256', 'image_properties_sha256', 'runtime_verified'))
     avd = 'opennexus-ci-' + ctx['owner']['GITHUB_RUN_ID'] + '-' + ctx['owner']['GITHUB_RUN_ATTEMPT']
-    require(binding['avd'] == avd and binding['runtime_verified'] is False and
-            binding['image_properties_sha256'] == image['image_properties']['sha256'] and
-            hashlib.sha256(raw_file(ctx['parent'] / 'avd' / (avd + '.avd') / 'config.ini')).hexdigest() == binding['config_sha256'],
-            'SDK_AVD_BINDING')
+    observed = None
+    def original_config_matches():
+        nonlocal observed
+        data = raw_file(ctx['parent'] / 'avd' / (avd + '.avd') / 'config.ini')
+        observed = avd_config_facts(ctx, data)
+        return hashlib.sha256(data).hexdigest() == binding['config_sha256']
+    try:
+        require(binding['avd'] == avd and binding['runtime_verified'] is False and
+                binding['image_properties_sha256'] == image['image_properties']['sha256'] and original_config_matches(),
+                'SDK_AVD_BINDING')
+    except Exception as error:
+        if type(error) is kernel.ArchiveError and str(error) == 'SDK_AVD_BINDING':
+            try: record_avd_binding_failure(ctx, binding, image, avd, observed)
+            except Exception: pass
+        raise
     layout_ready(ctx)
     intent = read(ctx, 'launch-selection-intent', ('owner', 'launcher', 'automatic_retry'))
     require(intent['launcher'] == value['launcher'] and intent['automatic_retry'] is False, 'SDK_LAUNCH_INTENT')
