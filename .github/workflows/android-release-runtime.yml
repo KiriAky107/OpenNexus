@@ -124,6 +124,7 @@ jobs:
           if [[ "$RUNTIME_SCENE" == sync-timeout ]]; then
             python3 scripts/android_release_sdk_lifecycle.py prepare
             python3 scripts/android_release_sdk_lifecycle.py install-image
+            python3 scripts/android_release_sdk_lifecycle.py prepare-layout
           elif [[ -x "$manager/android" ]]; then
             for package in platforms/android-36 build-tools/36.0.0 platform-tools emulator system-images/android-36/google_apis/x86_64; do
               "$manager/android" --no-metrics --sdk="$ANDROID_HOME" sdk --ignore-outdated-xmls install "$package"

@@ -41,10 +41,17 @@ class SDKLifecycle(unittest.TestCase):
         self.workspace = Path(temporary.name).resolve(); self.parent = self.workspace / '.build/android-release-runtime'
         for name in ('origin-proof', 'avd', 'emulator-home'): (self.parent / name).mkdir(parents=True)
         sdk = self.workspace / 'global-sdk'; (sdk / 'platform-tools').mkdir(parents=True)
-        self.adb = sdk / 'platform-tools/adb'; self.adb.write_bytes(b'fixture, not executable')
+        self.adb = sdk / 'platform-tools/adb'
+        self.adb.write_bytes(b'\x7fELF\x02\x01\x01' + bytes(11) + b'\x3e\x00fixture'); self.adb.chmod(0o755)
         for name in ('platforms/android-36/android.jar', 'build-tools/36.0.0/aapt2', 'build-tools/36.0.0/apksigner',
                      'cmdline-tools/latest/bin/sdkmanager', 'cmdline-tools/latest/bin/avdmanager'):
             path = sdk / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'fixture, not executable')
+        (sdk / 'platform-tools/source.properties').write_bytes(b'Pkg.Revision=36.0.2\n')
+        (sdk / 'platform-tools/package.xml').write_bytes(b'<repository><localPackage path="platform-tools"/></repository>')
+        (sdk / 'platforms/android-36/source.properties').write_bytes(b'Pkg.Revision=2\nAndroidVersion.ApiLevel=36\n')
+        (sdk / 'platforms/android-36/package.xml').write_bytes(b'<repository><localPackage path="platforms;android-36"><type-details><api-level>36</api-level></type-details></localPackage></repository>')
+        with zipfile.ZipFile(sdk / 'platforms/android-36/android.jar', 'w') as archive:
+            archive.writestr('android/Fixture.class', b'controlled tiny jar')
         (sdk / 'licenses').mkdir(); (sdk / 'licenses/android-sdk-license').write_bytes(b'\n' + b'a' * 40 + b'\n')
         classpath = sdk / 'cmdline-tools/latest/lib/avdmanager-classpath.jar'
         classpath.parent.mkdir(parents=True); classpath.write_bytes(b'controlled vendor classpath fixture')
@@ -122,6 +129,7 @@ class SDKLifecycle(unittest.TestCase):
 
     def ready(self, *, observe=True):
         self.prepared_image()
+        self.assertTrue(subject.prepare_layout(self.ctx)['passed'])
         self.assertEqual(subject.select_launcher(self.ctx), str(self.ctx['launcher']))
         with patch.object(subject.subprocess, 'run', side_effect=self.command):
             self.assertTrue(subject.probe(self.ctx)['passed'])
@@ -164,7 +172,7 @@ class SDKLifecycle(unittest.TestCase):
         self.assertTrue(result['passed']); self.assertFalse(result['SDK_removed_here']); self.assertFalse(result['runtime_verified'])
 
     def test_selected_launcher_tamper_and_unknown_version_never_accept_probe(self):
-        self.prepared_image(); subject.select_launcher(self.ctx)
+        self.prepared_image(); subject.prepare_layout(self.ctx); subject.select_launcher(self.ctx)
         def command(argv, **kwargs): return subprocess.CompletedProcess(argv, 0, b'private wrong version', b'private')
         with patch.object(subject.subprocess, 'run', side_effect=command): result = subject.probe(self.ctx)
         self.assertFalse(result['passed']); self.assertFalse((self.parent / 'emulator-version.txt').exists())
@@ -453,6 +461,8 @@ class SDKLifecycle(unittest.TestCase):
         self.assertLess(body.index('android_release_sdk_lifecycle.py prepare'), body.index('select-launcher'))
         self.assertIn('probe-version-and-accel', body); self.assertIn('observe-launch', body)
         self.assertIn('android_release_sdk_lifecycle.py install-image', body)
+        self.assertLess(body.index(' install-image'), body.index(' prepare-layout'))
+        self.assertLess(body.index(' prepare-layout'), body.index(' select-launcher'))
         self.assertIn('android_release_sdk_lifecycle.py create-avd', body)
         self.assertNotIn('env ANDROID_HOME="$sdk_root" ANDROID_SDK_ROOT="$sdk_root" "$manager/avdmanager"', body)
         self.assertIn('for package in platforms/android-36 build-tools/36.0.0 platform-tools emulator system-images/android-36/google_apis/x86_64;', body)

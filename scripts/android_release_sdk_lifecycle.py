@@ -12,6 +12,7 @@ import time
 import uuid
 
 import android_release_sdk_archive as kernel
+import android_release_sdk_layout as layout
 
 require = kernel.require
 PREFIX = 'sdk-'
@@ -23,7 +24,7 @@ REGISTRY_PROPERTIES = (b'Pkg.UserSrc=false\nPkg.Revision=37.2.12\nPkg.Path=emula
                        b'Pkg.Desc=Android Emulator\nPkg.BuildId=16428233')
 REGISTRY_KEYS = ('owner', 'passed', 'properties', 'package_xml', 'created_here', 'tools', 'commands',
                  'build_name', 'build_removed', 'SDKmanager_registered', 'runtime_verified')
-SAFE = kernel.SAFE_CODES | frozenset('''SDK_CONTEXT SDK_BOOT SDK_JSON SDK_FILE_ALIAS
+SAFE = kernel.SAFE_CODES | layout.SAFE | frozenset('''SDK_CONTEXT SDK_BOOT SDK_JSON SDK_FILE_ALIAS
 SDK_ORIGINAL_RECORD_EXISTS SDK_PREPARE_RESULT SDK_ROOT_OWNER SDK_LAUNCHER_CHANGED
 SDK_LAUNCH_INTENT SDK_LAUNCH_PID SDK_PROC_UNKNOWN SDK_PROC_IDENTITY SDK_PROC_LIMIT
 SDK_ADB_UNKNOWN SDK_AVD_PRESENT SDK_CLEANUP_DEADLINE SDK_CLEANUP_CLOCK
@@ -32,7 +33,7 @@ SDK_PROBE_IDENTITY SDK_COMMAND_UNKNOWN SDK_VERSION_UNAVAILABLE SDK_GLOBAL_TOOLS
 SDK_LICENSE SDK_REGISTERED_EMULATOR SDK_IMAGE_IDENTITY SDK_AVD_BINDING
 SDK_PROC_PRIVILEGED_READ SDK_PROC_OWNER_CHANGED SDK_REGISTRY_TOOLS SDK_REGISTRY_SOURCE
 SDK_REGISTRY_CHANGED SDK_REGISTRY_COMMAND SDK_REGISTRY_BUILD_CLEANUP SDK_REGISTRY_NOT_READY
-SDK_AVD_CONTEXT SDK_AVD_COMMAND SDK_AVD_ALREADY_EXISTS'''.split())
+SDK_AVD_CONTEXT SDK_AVD_COMMAND SDK_AVD_ALREADY_EXISTS SDK_LAYOUT_BINDING SDK_LAYOUT_UNAVAILABLE'''.split())
 
 
 def boot():
@@ -184,9 +185,85 @@ def prepare(ctx):
 def select_launcher(ctx):
     value = prepared(ctx)
     image_ready(ctx)
+    layout_ready(ctx)
     emit(ctx, 'launch-selection-intent', dict(owner=ctx['owner'], launcher=value['launcher'], automatic_retry=False))
     prepared(ctx)
+    layout_ready(ctx)
     return str(ctx['launcher'])
+
+
+def layout_owner(ctx):
+    require(context() == ctx and boot() == ctx['owner']['host_boot_id'], 'SDK_LAYOUT_OWNER')
+    prepared(ctx); image_ready(ctx)
+
+
+def layout_lineage(ctx):
+    return {key: hashlib.sha256(raw_file(ctx['evidence'] / ('sdk-' + key + '.json'))).hexdigest()
+            for key in ('prepare-result', 'registry-result', 'image-result')}
+
+
+def layout_records(ctx):
+    result = layout._read(ctx, 'result')[0]
+    return dict(intent=hashlib.sha256(raw_file(ctx['evidence'] / 'sdk-layout-intent.json')).hexdigest(),
+                inventory=result['inventory_sha256'],
+                result=hashlib.sha256(raw_file(ctx['evidence'] / 'sdk-layout-result.json')).hexdigest())
+
+
+def prepare_layout(ctx):
+    """One fixed dependency copy after the original image install and before any launch."""
+    layout_owner(ctx)
+    require(not list(ctx['evidence'].glob('sdk-runtime-dependencies-*.json')),
+            'SDK_ORIGINAL_RECORD_EXISTS')
+    lineage = layout_lineage(ctx)
+    def guard():
+        layout_owner(ctx)
+        require(layout_lineage(ctx) == lineage and not any((ctx['parent'] / name).exists() or
+                (ctx['parent'] / name).is_symlink() for name in ('emulator.pid', 'emulator.log', 'emulator-version.txt'))
+                and not any((ctx['evidence'] / ('sdk-' + name + '.json')).exists() for name in
+                ('launch-selection-intent', 'probe-intent', 'avd-create-intent', 'avd-binding', 'launch-observed')),
+                'SDK_LAYOUT_BINDING')
+    guard()
+    emit(ctx, 'runtime-dependencies-intent', dict(owner=ctx['owner'], packages=list(layout.PACKAGES),
+         lineage=lineage, automatic_retry=False))
+    result = dict(owner=ctx['owner'], passed=False, lineage=lineage, layout_records=None, runtime_verified=False)
+    try:
+        guard()
+        copied = layout.prepare(ctx, guard)
+        require(copied.get('passed') is True, copied.get('guard_code', 'SDK_LAYOUT_UNAVAILABLE'))
+        layout.ready(ctx, guard)
+        result['layout_records'] = layout_records(ctx)
+        guard(); result['passed'] = True
+    except Exception as error:
+        result['guard_code'] = str(error) if type(error) is kernel.ArchiveError and str(error) in SAFE else 'SDK_LAYOUT_UNAVAILABLE'
+        result['error_kind'] = {kernel.ArchiveError: 'sequence_guard', PermissionError: 'permission_denied',
+            FileExistsError: 'file_exists', FileNotFoundError: 'file_missing', OSError: 'io'}.get(type(error), 'unclassified')
+    emit(ctx, 'runtime-dependencies-result', result)
+    return result
+
+
+def layout_ready(ctx):
+    layout_owner(ctx)
+    intent = read(ctx, 'runtime-dependencies-intent', ('owner', 'packages', 'lineage', 'automatic_retry'))
+    result = read(ctx, 'runtime-dependencies-result', ('owner', 'passed', 'lineage', 'layout_records', 'runtime_verified'))
+    require(intent['packages'] == list(layout.PACKAGES) and intent['automatic_retry'] is False and
+            intent['lineage'] == result['lineage'] == layout_lineage(ctx) and result['passed'] is True and
+            result['runtime_verified'] is False and type(result['layout_records']) is dict and
+            set(result['layout_records']) == {'intent', 'inventory', 'result'} and
+            all(type(v) is str and re.fullmatch(r'[0-9a-f]{64}', v) for v in result['layout_records'].values()),
+            'SDK_LAYOUT_BINDING')
+    original = result['layout_records']
+    def guard():
+        layout_owner(ctx)
+        require(layout_lineage(ctx) == result['lineage'] and layout_records(ctx) == original,
+                'SDK_LAYOUT_BINDING')
+    layout.ready(ctx, guard)
+    guard()
+    return result
+
+
+def image_root(ctx):
+    image_ready(ctx); layout_ready(ctx)
+    return str(ctx['root'] / 'runtime')
 
 
 def emulator_catalogue(raw):
@@ -477,7 +554,7 @@ def bind_avd(ctx):
 
 def create_avd(ctx):
     """One original vendor CLI call with an explicit owned SDK lookup context."""
-    image_ready(ctx); validate_probe(ctx)
+    image_ready(ctx); validate_probe(ctx); layout_ready(ctx)
     tools = registry_ready(ctx)['tools']
     name = 'opennexus-ci-' + ctx['owner']['GITHUB_RUN_ID'] + '-' + ctx['owner']['GITHUB_RUN_ATTEMPT']
     avd = ctx['parent'] / 'avd' / (name + '.avd')
@@ -485,7 +562,7 @@ def create_avd(ctx):
     private = ctx['root'] / 'runtime'
     descriptor = private / 'cmdline-tools/avd-root-context'
     lineage = {key: hashlib.sha256(raw_file(ctx['evidence'] / ('sdk-' + key + '.json'))).hexdigest()
-               for key in ('registry-result', 'image-result', 'probe-result')}
+               for key in ('registry-result', 'image-result', 'probe-result', 'runtime-dependencies-result')}
     argv = [tools['java']['path'], '-Xmx128m', '-Dcom.android.sdkmanager.toolsdir=' + str(descriptor),
             '-cp', tools['classpath']['path'], 'com.android.sdklib.tool.AvdManagerCli',
             'create', 'avd', '--name', name, '--package', 'system-images;android-36;google_apis;x86_64',
@@ -498,7 +575,7 @@ def create_avd(ctx):
     descriptor_identity = None
     try:
         def guard(*, missing):
-            image_ready(ctx); validate_probe(ctx)
+            image_ready(ctx); validate_probe(ctx); layout_ready(ctx)
             require(registry_tools(ctx) == tools and boot() == ctx['owner']['host_boot_id'], 'SDK_AVD_CONTEXT')
             for key, digest in lineage.items():
                 require(hashlib.sha256(raw_file(ctx['evidence'] / ('sdk-' + key + '.json'))).hexdigest() == digest,
@@ -614,6 +691,7 @@ def install_image(ctx):
 def probe(ctx):
     value = prepared(ctx)
     image_ready(ctx)
+    layout_ready(ctx)
     selection = read(ctx, 'launch-selection-intent', ('owner', 'launcher', 'automatic_retry'))
     require(selection['launcher'] == value['launcher'] and selection['automatic_retry'] is False, 'SDK_LAUNCH_INTENT')
     version_file = ctx['parent'] / 'emulator-version.txt'
@@ -624,6 +702,7 @@ def probe(ctx):
     try:
         for command in commands:
             prepared(ctx)
+            layout_ready(ctx)
             record = dict(argv=command, attempted=True, returncode=None)
             result['commands'].append(record)
             completed = subprocess.run(command, capture_output=True, timeout=30, check=False)
@@ -632,6 +711,7 @@ def probe(ctx):
                           stderr_bytes=len(completed.stderr), stderr_sha256=hashlib.sha256(completed.stderr).hexdigest())
             require(completed.returncode == 0 and len(completed.stdout) <= 65536 and
                     len(completed.stderr) <= 65536, 'SDK_COMMAND_UNKNOWN')
+            layout_ready(ctx)
             if command[-1] == '-version':
                 pattern = rb'(?:INFO[ ]{1,20}\|[ ]*)?(Android emulator version 37\.2\.12(?:\.0)? \(build_id 16428233\))(?: \(CL:[A-Za-z0-9/:._-]{1,40}\))?'
                 admitted = [match.group(1) for stream in (completed.stdout, completed.stderr)
@@ -716,7 +796,7 @@ def sdk_processes(ctx):
             except PermissionError:
                 executable = sdk_permission_readlink(ctx, path, identity)
             require(sdk_stat(path)[:2] == identity[:2], 'SDK_PROC_OWNER_CHANGED')
-            if owns_executable(ctx, executable): found.append(int(path.name))
+            if owns_executable(ctx, executable) or owns_dependency_executable(ctx, executable): found.append(int(path.name))
         except FileNotFoundError:
             if path.exists():
                 value = proc(int(path.name))
@@ -732,6 +812,13 @@ def owns_executable(ctx, value):
     return path.is_absolute() and '..' not in path.parts and path != prefix and path.is_relative_to(prefix)
 
 
+def owns_dependency_executable(ctx, value):
+    if type(value) is not str or len(value) > 4096: return False
+    path = Path(value)
+    return path.is_absolute() and '..' not in path.parts and any(path != ctx['root'] / 'runtime' / package and
+           path.is_relative_to(ctx['root'] / 'runtime' / package) for package in layout.PACKAGES)
+
+
 def observe(ctx):
     observed_path = ctx['evidence'] / 'sdk-launch-observed.json'
     require(not observed_path.exists() and not observed_path.is_symlink(), 'SDK_ORIGINAL_RECORD_EXISTS')
@@ -744,6 +831,7 @@ def observe(ctx):
             binding['image_properties_sha256'] == image['image_properties']['sha256'] and
             hashlib.sha256(raw_file(ctx['parent'] / 'avd' / (avd + '.avd') / 'config.ini')).hexdigest() == binding['config_sha256'],
             'SDK_AVD_BINDING')
+    layout_ready(ctx)
     intent = read(ctx, 'launch-selection-intent', ('owner', 'launcher', 'automatic_retry'))
     require(intent['launcher'] == value['launcher'] and intent['automatic_retry'] is False, 'SDK_LAUNCH_INTENT')
     raw = raw_file(ctx['parent'] / 'emulator.pid', 16)
@@ -754,6 +842,7 @@ def observe(ctx):
             and not identity['executable'].endswith(' (deleted)'),
             'SDK_PROC_IDENTITY')
     prepared(ctx)
+    require(boot() == ctx['owner']['host_boot_id'], 'SDK_BOOT')
     record = dict(owner=ctx['owner'], pid=identity['pid'], uid=identity['uid'], start_ticks=identity['start_ticks'],
                   runtime_verified=False)
     emit(ctx, 'launch-observed', record)
@@ -847,8 +936,8 @@ def cleanup(ctx):
 def main(argv=None):
     actions = {'prepare': prepare, 'select-launcher': select_launcher, 'probe-version-and-accel': probe,
                'observe-launch': observe, 'cleanup': cleanup, 'install-image': install_image,
-               'image-root': lambda ctx: (image_ready(ctx), str(ctx['root'] / 'runtime'))[1], 'bind-avd': bind_avd,
-               'create-avd': create_avd}
+               'image-root': image_root, 'bind-avd': bind_avd,
+               'create-avd': create_avd, 'prepare-layout': prepare_layout}
     args = sys.argv[1:] if argv is None else argv
     require(len(args) == 1 and args[0] in actions, 'SDK_UNKNOWN_ACTION')
     ctx = context()

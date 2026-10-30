@@ -25,6 +25,7 @@ class OwnedAvdContext(unittest.TestCase):
         subject.prepare(self.ctx)
         with patch.object(subject.subprocess, 'run', side_effect=self.command):
             self.assertTrue(subject.install_image(self.ctx)['passed'])
+            self.assertTrue(subject.prepare_layout(self.ctx)['passed'])
             subject.select_launcher(self.ctx)
             self.assertTrue(subject.probe(self.ctx)['passed'])
 
