@@ -2,6 +2,7 @@ package cc.kronecker.opennexus.sdkinternal;
 
 import com.android.repository.Revision;
 import com.android.repository.api.ProgressIndicatorAdapter;
+import com.android.repository.api.ProgressIndicator;
 import com.android.repository.api.RepoManager;
 import com.android.repository.api.Repository;
 import com.android.repository.api.SchemaModule;
@@ -12,17 +13,23 @@ import com.android.repository.impl.meta.TypeDetails;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
+import java.io.InputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import javax.xml.bind.JAXBElement;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
+import org.w3c.dom.ls.LSResourceResolver;
 
 /** SDK vendor metadata only. No filesystem, network, installer or device actions. */
 public final class OwnedEmulatorRegistry {
@@ -107,12 +114,60 @@ public final class OwnedEmulatorRegistry {
             display.getChildNodes().getLength() == 1 && display.getFirstChild().getNodeType() == Node.TEXT_NODE);
     }
 
+    private static Method schemaMethod(Class<?> api, boolean reading) {
+        try {
+            Method method;
+            if (reading) {
+                try {
+                    method = api.getMethod("unmarshal", InputStream.class, Collection.class,
+                        boolean.class, ProgressIndicator.class, String.class);
+                } catch (NoSuchMethodException olderContract) {
+                    method = api.getMethod("unmarshal", InputStream.class, Collection.class,
+                        boolean.class, ProgressIndicator.class);
+                }
+            } else {
+                try {
+                    method = api.getMethod("marshal", JAXBElement.class, Collection.class,
+                        OutputStream.class, LSResourceResolver.class, ProgressIndicator.class, boolean.class);
+                } catch (NoSuchMethodException olderContract) {
+                    method = api.getMethod("marshal", JAXBElement.class, Collection.class,
+                        OutputStream.class, LSResourceResolver.class, ProgressIndicator.class);
+                }
+            }
+            require(Modifier.isStatic(method.getModifiers()) &&
+                method.getReturnType() == (reading ? Object.class : void.class));
+            return method;
+        } catch (NoSuchMethodException unknownContract) { throw new Guard(); }
+    }
+
+    // The CLI always supplies SchemaModuleUtil.class. Package visibility lets the
+    // contract check exercise both fixed vendor signatures without installing SDKs.
+    static Repository readSchema(Class<?> api, byte[] bytes) throws Exception {
+        Method method = schemaMethod(api, true);
+        Object[] arguments = method.getParameterCount() == 5
+            ? new Object[] {new ByteArrayInputStream(bytes), modules(), true, progress(), "owned-emulator-registry"}
+            : new Object[] {new ByteArrayInputStream(bytes), modules(), true, progress()};
+        return (Repository)method.invoke(null, arguments);
+    }
+
+    static byte[] writeSchema(Class<?> api, Repository repository) throws Exception {
+        Method method = schemaMethod(api, false);
+        CommonFactory factory = RepoManager.getCommonModule().createLatestFactory();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Object[] arguments = method.getParameterCount() == 6
+            ? new Object[] {factory.generateRepository(repository), modules(), output,
+                SchemaModuleUtil.createResourceResolver(modules(), progress()), progress(), true}
+            : new Object[] {factory.generateRepository(repository), modules(), output,
+                SchemaModuleUtil.createResourceResolver(modules(), progress()), progress()};
+        method.invoke(null, arguments);
+        return output.toByteArray();
+    }
+
     public static void validate(byte[] bytes) throws Exception {
         closedDocument(bytes);
         System.setProperty("javax.xml.accessExternalDTD", "");
         System.setProperty("javax.xml.accessExternalSchema", "");
-        Repository repository = (Repository)SchemaModuleUtil.unmarshal(
-            new ByteArrayInputStream(bytes), modules(), true, progress(), "owned-emulator-registry");
+        Repository repository = readSchema(SchemaModuleUtil.class, bytes);
         require(repository != null && repository.getRemotePackage().isEmpty() && repository.getLicense().isEmpty() &&
             repository.getChannel().isEmpty());
         var local = repository.getLocalPackage();
@@ -129,10 +184,7 @@ public final class OwnedEmulatorRegistry {
         local.setDisplayName("Android Emulator"); local.setObsolete(false);
         local.setTypeDetails((TypeDetails)RepoManager.getGenericModule().createLatestFactory().createGenericDetailsType());
         Repository repository = factory.createRepositoryType(); repository.setLocalPackage(local);
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        SchemaModuleUtil.marshal(factory.generateRepository(repository), modules(), output,
-            SchemaModuleUtil.createResourceResolver(modules(), progress()), progress(), true);
-        byte[] bytes = output.toByteArray(); validate(bytes); return bytes;
+        byte[] bytes = writeSchema(SchemaModuleUtil.class, repository); validate(bytes); return bytes;
     }
 
     public static void main(String[] args) {
