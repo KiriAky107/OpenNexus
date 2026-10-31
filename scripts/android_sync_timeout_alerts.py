@@ -77,4 +77,3 @@ def validate(value, scene, elapsed):
     # Strict full-label pairs are a subset of exact per-channel matches.
     return all(s <= min(2, a + b) for s, a, b in zip(value['strict_counts'],
                value['text_counts'], value['description_counts']))
-
