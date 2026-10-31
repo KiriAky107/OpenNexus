@@ -15,6 +15,10 @@ from test_android_release_sdk_lifecycle import SDKLifecycle
 ACTUAL_JAVA_HOME = os.environ.get('JAVA_HOME', 'E:/java21')
 ACTUAL_ANDROID_HOME = os.environ.get('ANDROID_HOME', 'C:/Users/KiriAky/AppData/Local/Android/Sdk')
 TEMPORARIES = []
+CONFIG = (b'image.sysdir.1=system-images/android-36/google_apis/x86_64/\n'
+          b'abi.type=x86_64\ntag.id=google_apis\ndisk.dataPartition.size=800M\n' +
+          b''.join(('Unknown' + str(i) + '=' + ('' if i == 1 else 'private-value-' + str(i)) + '\n').encode()
+                   for i in range(133)))
 
 
 class OwnedAvdContext(unittest.TestCase):
@@ -41,7 +45,7 @@ class OwnedAvdContext(unittest.TestCase):
         name = 'opennexus-ci-123456-1'
         self.assertEqual(argv[-8:], ['create', 'avd', '--name', name, '--package', 'system-images;android-36;google_apis;x86_64', '--device', 'pixel_7'])
         directory = self.parent / 'avd' / (name + '.avd'); directory.mkdir()
-        (directory / 'config.ini').write_text('image.sysdir.1=system-images/android-36/google_apis/x86_64/\nabi.type=x86_64\ntag.id=google_apis\n')
+        (directory / 'config.ini').write_bytes(CONFIG)
         directory.with_suffix('.ini').write_text('path=' + str(directory) + '\ntarget=android-36\n')
         return subprocess.CompletedProcess(argv, 0, b'private controlled vendor output', b'')
 
@@ -110,10 +114,11 @@ class OwnedAvdContext(unittest.TestCase):
         self.prepare_probed()
         def command(argv, **kwargs):
             value = self.create_command(argv, **kwargs)
-            (self.parent / 'avd/opennexus-ci-123456-1.avd/config.ini').write_text('image.sysdir.1=/unowned-image\nabi.type=x86_64\ntag.id=google_apis\n')
+            (self.parent / 'avd/opennexus-ci-123456-1.avd/config.ini').write_bytes(
+                CONFIG.replace(b'system-images/android-36/google_apis/x86_64/', b'/unowned-image'))
             return value
         with patch.object(subject.subprocess, 'run', side_effect=command): value = subject.create_avd(self.ctx)
-        self.assertFalse(value['passed']); self.assertEqual(value['guard_code'], 'SDK_AVD_BINDING')
+        self.assertFalse(value['passed']); self.assertEqual(value['guard_code'], 'SDK_CONFIG_INPUT')
         self.assertIsNone(value['binding'])
 
     def test_new_action_accepts_no_path_package_name_or_additional_parameter(self):

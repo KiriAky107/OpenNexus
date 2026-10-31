@@ -14,6 +14,7 @@ import uuid
 import android_release_sdk_archive as kernel
 import android_release_sdk_layout as layout
 import android_release_sdk_ini as ini
+import android_release_sdk_config_owned as config_owned
 
 require = kernel.require
 PREFIX = 'sdk-'
@@ -34,7 +35,9 @@ SDK_PROBE_IDENTITY SDK_COMMAND_UNKNOWN SDK_VERSION_UNAVAILABLE SDK_GLOBAL_TOOLS
 SDK_LICENSE SDK_REGISTERED_EMULATOR SDK_IMAGE_IDENTITY SDK_AVD_BINDING
 SDK_PROC_PRIVILEGED_READ SDK_PROC_OWNER_CHANGED SDK_REGISTRY_TOOLS SDK_REGISTRY_SOURCE
 SDK_REGISTRY_CHANGED SDK_REGISTRY_COMMAND SDK_REGISTRY_BUILD_CLEANUP SDK_REGISTRY_NOT_READY
-SDK_AVD_CONTEXT SDK_AVD_COMMAND SDK_AVD_ALREADY_EXISTS SDK_LAYOUT_BINDING SDK_LAYOUT_UNAVAILABLE'''.split())
+SDK_AVD_CONTEXT SDK_AVD_COMMAND SDK_AVD_ALREADY_EXISTS SDK_LAYOUT_BINDING SDK_LAYOUT_UNAVAILABLE
+SDK_CONFIG_OWNER SDK_CONFIG_LINEAGE SDK_CONFIG_INPUT SDK_CONFIG_CHANGED SDK_CONFIG_UNAVAILABLE
+SDK_CONFIG_CLEANUP SDK_CONFIG_NOT_READY'''.split())
 
 
 def boot():
@@ -533,10 +536,13 @@ def bind_avd(ctx):
     name = 'opennexus-ci-' + ctx['owner']['GITHUB_RUN_ID'] + '-' + ctx['owner']['GITHUB_RUN_ATTEMPT']
     path = ctx['parent'] / 'avd' / (name + '.avd') / 'config.ini'
     data = raw_file(path)
+    configured = (ctx['evidence'] / 'sdk-avd-create-intent.json').exists()
+    if configured: config_owned.ready(ctx, sys.modules[__name__], data)
     values = {}
     for line in data.decode('ascii').splitlines():
         if '=' not in line: continue
         key, value = line.split('=', 1)
+        if configured: key, value = key.rstrip(' \t\r'), value.strip(' \t\r')
         if key in ('image.sysdir.1', 'abi.type', 'tag.id'):
             require(key not in values, 'SDK_AVD_BINDING'); values[key] = value
     require(set(values) == {'image.sysdir.1', 'abi.type', 'tag.id'} and values['abi.type'] == 'x86_64'
@@ -549,6 +555,9 @@ def bind_avd(ctx):
     require(source.resolve() == ctx['root'] / 'runtime/system-images/android-36/google_apis/x86_64', 'SDK_AVD_BINDING')
     value = dict(owner=ctx['owner'], avd=name, config_sha256=hashlib.sha256(data).hexdigest(),
                  image_properties_sha256=image['image_properties']['sha256'], runtime_verified=False)
+    if configured:
+        value['config_preparation_sha256'] = hashlib.sha256(raw_file(
+            ctx['evidence'] / 'sdk-avd-config-prepare-result.json')).hexdigest()
     emit(ctx, 'avd-binding', value)
     try: record_ini_prelaunch(ctx, value, data)
     except Exception: pass
@@ -570,10 +579,11 @@ def create_avd(ctx):
             '-cp', tools['classpath']['path'], 'com.android.sdklib.tool.AvdManagerCli',
             'create', 'avd', '--name', name, '--package', 'system-images;android-36;google_apis;x86_64',
             '--device', 'pixel_7']
-    require(not list(ctx['evidence'].glob('sdk-avd-create-*.json')), 'SDK_ORIGINAL_RECORD_EXISTS')
+    require(not list(ctx['evidence'].glob('sdk-avd-create-*.json')) and
+            not list(ctx['evidence'].glob('sdk-avd-config-prepare-*.json')), 'SDK_ORIGINAL_RECORD_EXISTS')
     emit(ctx, 'avd-create-intent', dict(owner=ctx['owner'], argv=argv, lineage=lineage,
          descriptor_relative='runtime/cmdline-tools/avd-root-context', automatic_retry=False))
-    result = dict(owner=ctx['owner'], passed=False, command=None, binding=None, locator_sha256=None,
+    result = dict(owner=ctx['owner'], passed=False, command=None, binding=None, locator_sha256=None, config_preparation_sha256=None,
                   lineage=lineage, runtime_verified=False, no_automatic_retry=True)
     descriptor_identity = None
     try:
@@ -617,10 +627,17 @@ def create_avd(ctx):
         original = raw_file(locator)
         paths = [line.split('=', 1)[1] for line in original.decode('ascii').splitlines() if line.startswith('path=')]
         require(paths == [str(avd)] and avd.is_dir() and not avd.is_symlink() and avd.resolve() == avd, 'SDK_AVD_CONTEXT')
+        configuration = config_owned.prepare_owned(ctx, sys.modules[__name__], lineage)
+        require(configuration['passed'] is True, configuration['guard_code'] or 'SDK_CONFIG_NOT_READY')
+        result['config_preparation_sha256'] = hashlib.sha256(raw_file(
+            ctx['evidence'] / 'sdk-avd-config-prepare-result.json')).hexdigest()
         result['binding'] = bind_avd(ctx)
         result['locator_sha256'] = hashlib.sha256(original).hexdigest()
         guard(missing=False)
         require(raw_file(locator) == original, 'SDK_AVD_CONTEXT')
+        config_owned.ready(ctx, sys.modules[__name__])
+        require(hashlib.sha256(raw_file(ctx['evidence'] / 'sdk-avd-config-prepare-result.json')).hexdigest() ==
+                result['config_preparation_sha256'], 'SDK_CONFIG_LINEAGE')
         result['passed'] = True
     except Exception as error:
         result['guard_code'] = str(error) if type(error) is kernel.ArchiveError and str(error) in SAFE else 'SDK_AVD_COMMAND'
@@ -961,12 +978,18 @@ def observe(ctx):
     value = prepared(ctx)
     validate_probe(ctx)
     image = image_ready(ctx)
-    binding = read(ctx, 'avd-binding', ('owner', 'avd', 'config_sha256', 'image_properties_sha256', 'runtime_verified'))
+    configured = any((ctx['evidence'] / ('sdk-' + key + '.json')).exists() or
+                     (ctx['evidence'] / ('sdk-' + key + '.json')).is_symlink() for key in
+                     ('avd-create-intent', 'avd-config-prepare-intent', 'avd-config-prepare-result'))
+    binding = read(ctx, 'avd-binding', ('owner', 'avd', 'config_sha256', 'image_properties_sha256', 'runtime_verified') +
+                   (('config_preparation_sha256',) if configured else ()))
     avd = 'opennexus-ci-' + ctx['owner']['GITHUB_RUN_ID'] + '-' + ctx['owner']['GITHUB_RUN_ATTEMPT']
     observed = None
+    observed_data = None
     def original_config_matches():
-        nonlocal observed
+        nonlocal observed, observed_data
         data = raw_file(ctx['parent'] / 'avd' / (avd + '.avd') / 'config.ini')
+        observed_data = data
         observed = avd_config_facts(ctx, data)
         return hashlib.sha256(data).hexdigest() == binding['config_sha256']
     try:
@@ -978,6 +1001,14 @@ def observe(ctx):
             try: record_avd_binding_failure(ctx, binding, image, avd, observed)
             except Exception: pass
         raise
+    if configured:
+        config_owned.ready(ctx, sys.modules[__name__], observed_data)
+        created = read(ctx, 'avd-create-result', ('owner', 'passed', 'command', 'binding', 'locator_sha256',
+                       'config_preparation_sha256', 'lineage', 'runtime_verified', 'no_automatic_retry'))
+        require(created['passed'] is True and created['binding'] == binding and created['runtime_verified'] is False and
+                created['no_automatic_retry'] is True and binding['config_preparation_sha256'] ==
+                created['config_preparation_sha256'] == hashlib.sha256(raw_file(
+                    ctx['evidence'] / 'sdk-avd-config-prepare-result.json')).hexdigest(), 'SDK_CONFIG_LINEAGE')
     layout_ready(ctx)
     intent = read(ctx, 'launch-selection-intent', ('owner', 'launcher', 'automatic_retry'))
     require(intent['launcher'] == value['launcher'] and intent['automatic_retry'] is False, 'SDK_LAUNCH_INTENT')
