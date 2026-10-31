@@ -4,6 +4,7 @@ import re
 from android_runtime_probe import DRIVER,require
 from android_release_observation import APP
 from android_sync_stop_host import canonical,closed_json,record
+from android_sync_timeout_alerts import CODES as ALERT_CODES,validate as validate_alerts
 
 PHASE='cycle-timeout-original'
 SAFE_CODES=frozenset(('SYNC_PROCESS_OWNED_BOOT_ROOT_OR_DRIVER_CHANGED','SYNC_PROCESS_ORIGINAL_FOREGROUND_LIFETIME_CHANGED',
@@ -38,9 +39,9 @@ def validate_observation(value,parent,ready):
         and type(ready['elapsed_ms']) is int and 0<=ready['elapsed_ms']<2**63,'SYNC_TIMEOUT_FAILURE_CONTEXT')
     keys={'schema','phase','parent_intent_id','input_intent_id','package','uid','window','phase_stage','original_ready_elapsed_ms',
         'input_finished','last_scene_scan_finished','label_counts','observed_elapsed_ms','count_saturated_at','driver_error_kind',
-        'failure_only','native_timeout_verified','raw_UI_recorded'}
+        'failure_only','native_timeout_verified','raw_UI_recorded','alert_diagnostics'}
     require(type(value) is dict and set(value)==keys,'SYNC_TIMEOUT_FAILURE_OBSERVATION_SCOPE')
-    expected=dict(schema=1,phase=PHASE,parent_intent_id=parent['parent_intent_id'],input_intent_id=parent['input_intent_id'],
+    expected=dict(schema=2,phase=PHASE,parent_intent_id=parent['parent_intent_id'],input_intent_id=parent['input_intent_id'],
         package=APP,uid=ready['uid'],window=ready['window'],original_ready_elapsed_ms=ready['elapsed_ms'],input_finished=True,
         count_saturated_at=2,failure_only=True,native_timeout_verified=False,raw_UI_recorded=False)
     require(parent['phase']==PHASE and all(type(value[k]) is type(v) and value[k]==v for k,v in expected.items())
@@ -52,7 +53,10 @@ def validate_observation(value,parent,ready):
             and all(type(v) is int and 0<=v<=2 for v in value['label_counts'])
             and type(value['observed_elapsed_ms']) is int and ready['elapsed_ms']<=value['observed_elapsed_ms']<2**63,
             'SYNC_TIMEOUT_FAILURE_OBSERVATION_BOUNDED_SCENE')
+        require(value['alert_diagnostics'] is None or validate_alerts(value['alert_diagnostics'],
+                value['label_counts'],value['observed_elapsed_ms']),'SYNC_TIMEOUT_FAILURE_ALERT_SCOPE')
     else:require(value['label_counts'] is None and value['observed_elapsed_ms'] is None,'SYNC_TIMEOUT_FAILURE_OBSERVATION_ABSENT')
+    require(value['last_scene_scan_finished'] or value['alert_diagnostics'] is None,'SYNC_TIMEOUT_FAILURE_ALERT_ABSENT')
     return dict(value)
 
 
@@ -74,4 +78,5 @@ def retain_failure(subject,label,parent,ready):
             failure_only=True,automatic_retry=False,unvalidated_streams_exported=False,native_timeout_verified=False));return
     record(output,dict(available=True,observation=value,
         label_order=['failed','disabled_cycle','unconfirmed','network_alert','enabled_stop','completed','stopped','enabled_cycle'],
+        alert_kind_order=list(ALERT_CODES),alert_diagnostics_available=value['alert_diagnostics'] is not None,
         failure_only=True,automatic_retry=False,unvalidated_streams_exported=False,native_timeout_verified=False))

@@ -20,6 +20,8 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
     private static final String NETWORK="Last recorded sync error · Cannot reach the service. Check the network and service address. (SYNC_NETWORK_ERROR)";
     private OriginalSyncTimeoutActions actions;
     private int originalWindow=-1,originalUid=-1;
+    private int[][] lastAlerts;
+    private long lastAlertAt=-1;
     public ReleaseSyncTimeoutRuntimeProbe() {super(true);}
     @Override public void onCreate(Bundle args) {
         if(args==null || args.size()!=1 || !OriginalSyncTimeoutActions.allowed(args.getString("phase",""))) {
@@ -113,25 +115,32 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
     }
     private boolean failedState() throws Exception {
         int failure=0,disabled=0,unknown=0,network=0,stop=0,complete=0,stopped=0,enabledCycle=0;
+        ReleaseSyncTimeoutAlerts.Tally alerts=new ReleaseSyncTimeoutAlerts.Tally();
         for(AccessibilityNodeInfo node:nodes()) {
             if(!APP.equals(text(node.getPackageName())) || node.getWindowId()!=originalWindow || node.isPassword() || !node.isVisibleToUser())continue;
             if(label(node,"Cycle did not complete"))failure++;
             if(!node.isEditable() && text(node.getText()).equals(UNKNOWN))unknown++;
-            if(networkAlertNode(node))network++;
+            if(networkAlertNode(node,alerts))network++;
             if(label(node,"Sync one cycle now") && !node.isEnabled()) {Rect bounds=new Rect();node.getBoundsInScreen(bounds);guardOwner(originalWindow,bounds);disabled++;}
             if(label(node,"Sync one cycle now") && node.isEnabled())enabledCycle++;
             if(label(node,"Stop this cycle") && node.isEnabled())stop++;
             if(label(node,"Cycle completed"))complete++;
             if(label(node,"Cycle stopped"))stopped++;
         }
-        actions.recordScene(new int[]{failure,disabled,unknown,network,stop,complete,stopped,enabledCycle},SystemClock.elapsedRealtime());
+        long sampled=SystemClock.elapsedRealtime();
+        actions.recordScene(new int[]{failure,disabled,unknown,network,stop,complete,stopped,enabledCycle},sampled);
+        lastAlerts=alerts.snapshot();lastAlertAt=sampled;
         return OriginalSyncTimeoutActions.failedScene(failure,disabled,unknown,network,stop,complete,stopped,enabledCycle);
     }
     private void failedGuard() throws Exception {guardOwner(originalWindow,null);require(failedState(),"Original timeout failed UI changed");}
     static boolean networkAlert(String text) {return NETWORK.equals(text);}
     static boolean networkAlertNode(AccessibilityNodeInfo node) {
+        return networkAlertNode(node,null);
+    }
+    static boolean networkAlertNode(AccessibilityNodeInfo node,ReleaseSyncTimeoutAlerts.Tally alerts) {
         if(node.isEditable())return false;
         String value=text(node.getText()),description=text(node.getContentDescription());
+        if(alerts!=null)alerts.record(value,description);
         // An occupied label channel must be the complete fixed product warning.
         // The surrounding scene still checks the original owner and visibility.
         return (networkAlert(value) || networkAlert(description))
@@ -142,12 +151,24 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
         if(scene!=null)for(int count:scene)counts.put(count);
         String point="timeout-original-bounded-failed-state".equals(stage)?"waiting_failed_scene":
             "timeout-original-held-until-release".equals(stage)?"waiting_release":"other";
-        write("owned-sync-timeout-"+actions.phase+"-failure-observation.json",new JSONObject().put("schema",1)
+        JSONObject alertFacts=null;
+        if(scene!=null && lastAlerts!=null && lastAlertAt==actions.lastSceneAt()) {
+            JSONArray texts=new JSONArray(),descriptions=new JSONArray(),strict=new JSONArray();
+            for(int n:lastAlerts[0])texts.put(n);
+            for(int n:lastAlerts[1])descriptions.put(n);
+            for(int n:lastAlerts[2])strict.put(n);
+            alertFacts=new JSONObject().put("schema",1).put("catalog_sha256",ReleaseSyncTimeoutAlerts.CATALOG_SHA256)
+                .put("scan_elapsed_ms",lastAlertAt).put("text_counts",texts).put("description_counts",descriptions)
+                .put("strict_counts",strict).put("known_channel_conflicts",lastAlerts[3][0])
+                .put("raw_UI_recorded",false).put("native_timeout_verified",false);
+        }
+        write("owned-sync-timeout-"+actions.phase+"-failure-observation.json",new JSONObject().put("schema",2)
             .put("phase",actions.phase).put("parent_intent_id",actions.parent).put("input_intent_id",actions.input)
             .put("package",APP).put("uid",originalUid).put("window",originalWindow).put("phase_stage",point)
             .put("original_ready_elapsed_ms",actions.originalReadyAt()).put("input_finished",actions.originalInputFinished())
             .put("last_scene_scan_finished",scene!=null).put("label_counts",scene==null?JSONObject.NULL:counts)
             .put("observed_elapsed_ms",scene==null?JSONObject.NULL:actions.lastSceneAt()).put("count_saturated_at",2)
+            .put("alert_diagnostics",alertFacts==null?JSONObject.NULL:alertFacts)
             .put("driver_error_kind",error instanceof IllegalStateException && "OWNED_SYNC_TIMEOUT_ORIGINAL_SEQUENCE".equals(error.getMessage())?"sequence_guard":"unclassified")
             .put("failure_only",true).put("native_timeout_verified",false).put("raw_UI_recorded",false));
     }
