@@ -850,6 +850,10 @@ def record_ini_prelaunch(ctx, binding, data):
     emit(ctx, 'avd-config-semantics', dict(owner=ctx['owner'], stage='bind-original-config',
          avd=binding['avd'], config_sha256=binding['config_sha256'],
          image_properties_sha256=binding['image_properties_sha256'], projection=projection, runtime_verified=False))
+    fingerprints = checked_ini_fingerprints(ini.fingerprints(ctx, data), projection)
+    emit(ctx, 'avd-config-fingerprints', dict(owner=ctx['owner'], stage='bind-original-config',
+         avd=binding['avd'], config_sha256=binding['config_sha256'],
+         image_properties_sha256=binding['image_properties_sha256'], fingerprints=fingerprints, runtime_verified=False))
 
 
 def expected_ini_projection(ctx, binding):
@@ -867,6 +871,29 @@ def expected_ini_projection(ctx, binding):
         projection = checked_ini_projection(original['projection'])
         require(projection['source_sha256'] == binding['config_sha256'], 'SDK_AVD_BINDING')
         return projection
+    except Exception:
+        return None
+
+
+def checked_ini_fingerprints(value, projection):
+    require(ini.fingerprints_valid(value) and all(type(value[k]) is type(projection[k]) and value[k] == projection[k]
+            for k in ('source_bytes', 'source_sha256', 'canonical_sha256', 'key_count')),
+            'SDK_AVD_BINDING')
+    require(not value['available'] or projection['available'] is True, 'SDK_AVD_BINDING')
+    return value
+
+
+def expected_ini_fingerprints(ctx, binding, projection):
+    if projection is None: return None
+    try:
+        original = read(ctx, 'avd-config-fingerprints', ('owner', 'stage', 'avd', 'config_sha256',
+                        'image_properties_sha256', 'fingerprints', 'runtime_verified'))
+        require(type(original['owner']['uid']) is int and original['stage'] == 'bind-original-config' and
+                original['avd'] == binding['avd'] == 'opennexus-ci-' + ctx['owner']['GITHUB_RUN_ID'] + '-' +
+                ctx['owner']['GITHUB_RUN_ATTEMPT'] and original['runtime_verified'] is False and
+                original['config_sha256'] == binding['config_sha256'] == projection['source_sha256'] and
+                original['image_properties_sha256'] == binding['image_properties_sha256'], 'SDK_AVD_BINDING')
+        return checked_ini_fingerprints(original['fingerprints'], projection)
     except Exception:
         return None
 
@@ -890,23 +917,24 @@ def avd_config_facts(ctx, data):
                 config_ascii=ascii_only, selected_keys_unique=all(len(v) == 1 for v in values.values()),
                 image_sysdir_literal_matches=len(values['image.sysdir.1']) == 1 and values['image.sysdir.1'][0] in admitted,
                 abi_x86_64=values['abi.type'] == ['x86_64'], tag_google_apis=values['tag.id'] == ['google_apis'],
-                ini_projection=ini.project(ctx, data))
+                ini_projection=ini.project(ctx, data), ini_fingerprints=ini.fingerprints(ctx, data))
 
 
 def record_avd_binding_failure(ctx, binding, image, avd, observed):
     expected = binding['config_sha256']
     require(type(expected) is str and re.fullmatch(r'[0-9a-f]{64}', expected), 'SDK_AVD_BINDING')
     keys = {'config_bytes', 'observed_config_sha256', 'config_ascii', 'selected_keys_unique',
-            'image_sysdir_literal_matches', 'abi_x86_64', 'tag_google_apis', 'ini_projection'}
+            'image_sysdir_literal_matches', 'abi_x86_64', 'tag_google_apis', 'ini_projection', 'ini_fingerprints'}
     if observed is not None:
         require(type(observed) is dict and set(observed) == keys and type(observed['config_bytes']) is int and
                 0 <= observed['config_bytes'] <= 65536 and type(observed['observed_config_sha256']) is str and
                 re.fullmatch(r'[0-9a-f]{64}', observed['observed_config_sha256']) and
-                all(type(observed[k]) is bool for k in keys - {'config_bytes', 'observed_config_sha256', 'ini_projection'}),
+                all(type(observed[k]) is bool for k in keys - {'config_bytes', 'observed_config_sha256', 'ini_projection', 'ini_fingerprints'}),
                 'SDK_AVD_BINDING')
         projection = checked_ini_projection(observed['ini_projection'])
         require(projection['source_bytes'] == observed['config_bytes'] and
                 projection['source_sha256'] == observed['observed_config_sha256'], 'SDK_AVD_BINDING')
+        checked_ini_fingerprints(observed['ini_fingerprints'], projection)
     facts = dict(binding_name_matches=binding['avd'] == avd, binding_runtime_false=binding['runtime_verified'] is False,
                  binding_image_matches=binding['image_properties_sha256'] == image['image_properties']['sha256'],
                  expected_config_sha256=expected, config_read=observed is not None,
@@ -919,6 +947,10 @@ def record_avd_binding_failure(ctx, binding, image, avd, observed):
         current = observed['ini_projection']
         facts['ini_full_map_equal'] = (expected_projection['canonical_sha256'] == current['canonical_sha256'] and
                                       expected_projection['key_count'] == current['key_count'])
+    expected_fingerprints = expected_ini_fingerprints(ctx, binding, expected_projection)
+    facts['ini_fingerprint_origin_valid'] = expected_fingerprints is not None
+    facts['ini_key_delta'] = ini.fingerprint_delta(expected_fingerprints,
+                                None if observed is None else observed['ini_fingerprints'])
     emit(ctx, 'avd-binding-failure', dict(owner=ctx['owner'], stage='observe-launch-binding',
          guard_code='SDK_AVD_BINDING', facts=facts, whole_passed=False, runtime_verified=False))
 
