@@ -108,6 +108,68 @@ final class ReleaseSyncTimeoutAlerts {
         "Last recorded sync error · The file revision changed. Refresh and review the conflict. (REVISION_CONFLICT)",
         "Last recorded sync error · Sync did not complete. Check service status and retry. (RATE_LIMITED)"
     };
+    static final String FRAGMENT_CATALOG_SHA256="48e3aa6bf5b911398eb73fe661284644d0e65e82e99f297225feef1a9dee1022";
+    private static final String HEADER="Last recorded sync error",DETAIL="Sync details";
+    private static final String[] BODIES={
+        "Sync did not complete. Check service status and retry. (SYNC_CONNECTION_FAILED)",
+        "Sync did not complete. Check service status and retry. (SYNC_RESPONSE_INVALID)",
+        "Cannot reach the service. Check the network and service address. (SYNC_NETWORK_ERROR)",
+        "Sync did not complete. Check service status and retry. (SYNC_TLS_UNAVAILABLE)",
+        "Sync did not complete. Check service status and retry. (SYNC_REDIRECT_BLOCKED)",
+        "Sync did not complete. Check service status and retry. (SYNC_FOREGROUND_CHANGED)",
+        "Sync did not complete. Check service status and retry. (SYNC_FOREGROUND_REQUIRED)",
+        "This sync cycle stopped. Retry can resume confirmed upload offsets. (SYNC_CANCELLED)",
+        "Sync did not complete. Check service status and retry. (SYNC_PAUSED)",
+        "The vault or sync binding changed. Refresh the page. (SYNC_BINDING_CHANGED)",
+        "Sync did not complete. Check service status and retry. (SYNC_NOT_BOUND)",
+        "Sync did not complete. Check service status and retry. (SYNC_TARGET_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_PAGE_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_AUTH_SELECTION_CHANGED)",
+        "Sync did not complete. Check service status and retry. (SYNC_AUTH_SELECTION_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_AUTH_IDENTITY_CHANGED)",
+        "Sync did not complete. Check service status and retry. (SYNC_AUTH_RECONCILIATION_REQUIRED)",
+        "Sign-in or device authorization expired. Sign in again. (SYNC_LOGIN_REQUIRED)",
+        "Sync did not complete. Check service status and retry. (SYNC_SESSION_EXPIRED)",
+        "Sign-in or device authorization expired. Sign in again. (SESSION_EXPIRED)",
+        "Sync did not complete. Check service status and retry. (SYNC_CREDENTIALS_UNAVAILABLE)",
+        "Sync did not complete. Check service status and retry. (SYNC_CREDENTIALS_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_ACTIVITY_BUSY)",
+        "Sync did not complete. Check service status and retry. (SYNC_ACTIVITY_LIMIT)",
+        "Sync did not complete. Check service status and retry. (SYNC_ACTIVITY_UNAVAILABLE)",
+        "Sync did not complete. Check service status and retry. (SYNC_ACTIVITY_RECONCILIATION_REQUIRED)",
+        "Sync did not complete. Check service status and retry. (SYNC_ACTIVITY_REQUEST_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_ACTIVITY_ID_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_ACTIVITY_OWNER_CHANGED)",
+        "Sync did not complete. Check service status and retry. (SYNC_WORKER_INTERRUPTED)",
+        "Sync did not complete. Check service status and retry. (SYNC_RESOLUTION_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_RESOLUTION_CHANGED)",
+        "The file revision changed. Refresh and review the conflict. (SYNC_CONFLICT_CHANGED)",
+        "The file revision changed. Refresh and review the conflict. (SYNC_REVIEW_CHANGED)",
+        "Sync did not complete. Check service status and retry. (SYNC_REVIEW_UNSAFE_FILE)",
+        "Sync did not complete. Check service status and retry. (SYNC_RESPONSE_TOO_LARGE)",
+        "Sync did not complete. Check service status and retry. (SYNC_TIME_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_ENDPOINT_INVALID)",
+        "Sync did not complete. Check service status and retry. (SYNC_LOGIN_INVALID)",
+        "Sync did not complete. Check service status and retry. (MOBILE_HOST_REQUIRED)",
+        "Sync did not complete. Check service status and retry. (SYNC_PLATFORM_UNSUPPORTED)",
+        "Sync did not complete. Check service status and retry. (MOBILE_STORAGE_UNAVAILABLE)",
+        "Sync did not complete. Check service status and retry. (HOST_BUSY)",
+        "The vault or sync binding changed. Refresh the page. (VAULT_CHANGED)",
+        "Remote storage quota is insufficient. Adjust it or clean up remote history, then retry. (QUOTA_EXCEEDED)",
+        "Sync did not complete. Check service status and retry. (FILESYSTEM_ERROR)",
+        "Sync did not complete. Check service status and retry. (DATABASE_ERROR)",
+        "Sync did not complete. Check service status and retry. (SYNC_REMOTE_ERROR)",
+        "The file revision changed. Refresh and review the conflict. (REVISION_CONFLICT)",
+        "Sync did not complete. Check service status and retry. (RATE_LIMITED)"
+    };
+    static String bodyLabel(int index) {return BODIES[index];}
+    static String headerLabel() {return HEADER;}
+    static String detailLabel() {return DETAIL;}
+    static int bodyKind(String value) {
+        if(value==null || value.length()>512)return -1;
+        for(int i=0;i<BODIES.length;i++)if(BODIES[i].equals(value))return i;
+        return -1;
+    }
     static int size() {return CODES.length;}
     static String[] codes() {return CODES.clone();}
     static String label(int index) {return LABELS[index];}
@@ -124,6 +186,7 @@ final class ReleaseSyncTimeoutAlerts {
     }
     static final class Tally {
         private final int[] text=new int[size()],description=new int[size()],strict=new int[size()];
+        private final int[] bodyText=new int[size()],bodyDescription=new int[size()],header=new int[2],detail=new int[2];
         private int conflicts;
         void record(String value,String label) {
             String a=value==null?"":value,b=label==null?"":label;
@@ -133,9 +196,17 @@ final class ReleaseSyncTimeoutAlerts {
             if(accepted>=0)strict[accepted]=Math.min(2,strict[accepted]+1);
             if((first>=0 || second>=0) && !a.isEmpty() && !b.isEmpty() && !a.equals(b))
                 conflicts=Math.min(2,conflicts+1);
+            int bodyFirst=bodyKind(a),bodySecond=bodyKind(b);
+            if(bodyFirst>=0)bodyText[bodyFirst]=Math.min(2,bodyText[bodyFirst]+1);
+            if(bodySecond>=0)bodyDescription[bodySecond]=Math.min(2,bodyDescription[bodySecond]+1);
+            if(HEADER.equals(a))header[0]=Math.min(2,header[0]+1);
+            if(HEADER.equals(b))header[1]=Math.min(2,header[1]+1);
+            if(DETAIL.equals(a))detail[0]=Math.min(2,detail[0]+1);
+            if(DETAIL.equals(b))detail[1]=Math.min(2,detail[1]+1);
         }
         int[][] snapshot() {
-            return new int[][]{text.clone(),description.clone(),strict.clone(),new int[]{conflicts}};
+            return new int[][]{text.clone(),description.clone(),strict.clone(),new int[]{conflicts},
+                bodyText.clone(),bodyDescription.clone(),header.clone(),detail.clone()};
         }
     }
 }

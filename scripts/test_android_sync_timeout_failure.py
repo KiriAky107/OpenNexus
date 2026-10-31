@@ -14,7 +14,7 @@ from test_android_sync_timeout_host import Harness,parent,ready
 
 def observation():
     p,r=parent(),ready()
-    return dict(schema=2,phase=host.TIMEOUT,parent_intent_id=p['parent_intent_id'],input_intent_id=p['input_intent_id'],package=host.APP,
+    return dict(schema=3,phase=host.TIMEOUT,parent_intent_id=p['parent_intent_id'],input_intent_id=p['input_intent_id'],package=host.APP,
         uid=r['uid'],window=r['window'],phase_stage='waiting_failed_scene',original_ready_elapsed_ms=r['elapsed_ms'],input_finished=True,
         last_scene_scan_finished=True,label_counts=[1,1,1,0,0,0,0,0],observed_elapsed_ms=32000,count_saturated_at=2,
         driver_error_kind='sequence_guard',failure_only=True,native_timeout_verified=False,raw_UI_recorded=False,alert_diagnostics=None)

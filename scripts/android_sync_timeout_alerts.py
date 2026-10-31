@@ -53,6 +53,7 @@ CODES = (
     'RATE_LIMITED',
 )
 NETWORK_INDEX = 2
+FRAGMENT_CATALOG_SHA256 = '48e3aa6bf5b911398eb73fe661284644d0e65e82e99f297225feef1a9dee1022'
 
 
 def validate(value, scene, elapsed):
@@ -60,16 +61,22 @@ def validate(value, scene, elapsed):
             all(type(n) is int and 0 <= n <= 2 for n in scene)):
         return False
     keys = {'schema', 'catalog_sha256', 'scan_elapsed_ms', 'text_counts', 'description_counts',
-            'strict_counts', 'known_channel_conflicts', 'raw_UI_recorded', 'native_timeout_verified'}
-    if not (type(value) is dict and set(value) == keys and type(value['schema']) is int and value['schema'] == 1 and
+            'strict_counts', 'known_channel_conflicts', 'raw_UI_recorded', 'native_timeout_verified',
+            'fragment_catalog_sha256', 'fragment_body_text_counts', 'fragment_body_description_counts',
+            'fragment_header_counts', 'fragment_detail_counts', 'unassociated_source_fragments_only', 'complete_alert_inferred'}
+    if not (type(value) is dict and set(value) == keys and type(value['schema']) is int and value['schema'] == 2 and
             value['catalog_sha256'] == CATALOG_SHA256 and type(value['scan_elapsed_ms']) is int and
             value['scan_elapsed_ms'] == elapsed and value['raw_UI_recorded'] is False and
-            value['native_timeout_verified'] is False):
+            value['native_timeout_verified'] is False and value['fragment_catalog_sha256'] == FRAGMENT_CATALOG_SHA256 and
+            value['unassociated_source_fragments_only'] is True and value['complete_alert_inferred'] is False):
         return False
-    for key in ('text_counts', 'description_counts', 'strict_counts'):
+    for key in ('text_counts', 'description_counts', 'strict_counts', 'fragment_body_text_counts', 'fragment_body_description_counts'):
         counts = value[key]
         if not (type(counts) is list and len(counts) == len(CODES) and
                 all(type(n) is int and 0 <= n <= 2 for n in counts)):
+            return False
+    for key in ('fragment_header_counts', 'fragment_detail_counts'):
+        if not (type(value[key]) is list and len(value[key]) == 2 and all(type(n) is int and 0 <= n <= 2 for n in value[key])):
             return False
     if not (type(value['known_channel_conflicts']) is int and 0 <= value['known_channel_conflicts'] <= 2 and
             type(scene) is list and len(scene) == 8 and value['strict_counts'][NETWORK_INDEX] == scene[3]):

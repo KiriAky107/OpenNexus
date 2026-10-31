@@ -47,8 +47,12 @@ class TimeoutAlertDiagnostics(unittest.TestCase):
         fallback=re.search(r"default: message = t\('[^']*', '([^']+)'\)",presentation)[1]
         self.assertIn('return `${message} (${code})`',presentation)
         labels=[prefix+' · '+messages.get(code,fallback)+' ('+code+')' for code in codes]
+        bodies=[messages.get(code,fallback)+' ('+code+')' for code in codes]
+        detail=re.search(r'aria-label="t\(\x27[^\x27]*\x27, \x27([^\x27]+)\x27\)"',activity)[1]
         digest=hashlib.sha256(json.dumps(list(zip(codes,labels)),ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
         self.assertEqual(digest,alerts.CATALOG_SHA256)
+        fragment_digest=hashlib.sha256(json.dumps(dict(header=prefix,detail=detail,bodies=list(zip(codes,bodies))),ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+        self.assertEqual(fragment_digest,alerts.FRAGMENT_CATALOG_SHA256)
         source_path='scripts/android-runtime/ReleaseSyncTimeoutRuntimeProbe.java'
         old=subprocess.check_output(['git','show',PREVIOUS+':'+source_path],cwd=ROOT.parent).decode()
         new=(ROOT.parent/source_path).read_text()
@@ -100,13 +104,13 @@ public final class AccessibilityNodeInfo {
                 cp=os.pathsep.join(map(str,(harness,actual,sdk)))
                 original=run([str(java),'-Xmx64m','-cp',cp,'cc.kronecker.opennexus.testdriver.ReleaseSyncTimeoutAlertCheck',labels[alerts.NETWORK_INDEX]])
                 self.assertIn(b'node_channel_checks=20',original.stdout)
-                result=run([str(java),'-Xmx64m','-cp',cp,'cc.kronecker.opennexus.testdriver.ReleaseSyncTimeoutAlertsCheck',digest,*labels])
+                result=run([str(java),'-Xmx64m','-cp',cp,'cc.kronecker.opennexus.testdriver.ReleaseSyncTimeoutAlertsCheck',digest,fragment_digest,prefix,detail,*labels,*bodies])
                 self.assertIn(b'RELEASE_SYNC_TIMEOUT_ALERT_DIAGNOSTICS_OK',result.stdout);JVM_passed=True
                 for name,meta in inventory.items():self.assertEqual(hashlib.sha256((ROOT.parent/name).read_bytes()).hexdigest(),meta['sha256'])
         finally:
             print('RELEASE_SYNC_TIMEOUT_ALERT_DIAGNOSTIC_PROOF '+json.dumps(dict(product_source=PRODUCT,
                 fixed_source_files={k:{n:v for n,v in item.items() if n!='text'} for k,item in files.items()},
-                catalog_sha256=digest,catalog_kinds=len(codes),actual_API36_driver_inputs=inventory,SDK_jar_sha256=hashlib.sha256(sdk.read_bytes()).hexdigest(),
+                catalog_sha256=digest,fragment_catalog_sha256=fragment_digest,catalog_kinds=len(codes),actual_API36_driver_inputs=inventory,SDK_jar_sha256=hashlib.sha256(sdk.read_bytes()).hexdigest(),
                 commands=commands,actual_API36_compile_passed=compile_passed,synthetic_channel_JVM_passed=JVM_passed,
                 original_raw_network_predicate_and_owner_state_timing_source_equal=True,extra_UI_reads=0,
                 compiler_max_heap_MiB=128,JVM_max_heap_MiB=64,temporary_roots_remaining=[s for s in TEMPORARIES if Path(s).exists()],

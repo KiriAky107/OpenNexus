@@ -14,8 +14,11 @@ from test_android_sync_timeout_host import parent,ready,Harness
 
 
 def diagnostics():
-    value=dict(schema=1,catalog_sha256=alerts.CATALOG_SHA256,scan_elapsed_ms=32000,
+    value=dict(schema=2,catalog_sha256=alerts.CATALOG_SHA256,scan_elapsed_ms=32000,
         text_counts=[0]*50,description_counts=[0]*50,strict_counts=[0]*50,known_channel_conflicts=0,
+        fragment_catalog_sha256=alerts.FRAGMENT_CATALOG_SHA256,fragment_body_text_counts=[0]*50,
+        fragment_body_description_counts=[0]*50,fragment_header_counts=[0,0],fragment_detail_counts=[0,0],
+        unassociated_source_fragments_only=True,complete_alert_inferred=False,
         raw_UI_recorded=False,native_timeout_verified=False)
     # A different complete source-bound UI warning remains diagnostic, not a timeout pass.
     value['text_counts'][0]=value['strict_counts'][0]=1
@@ -40,7 +43,7 @@ class AlertDiagnostics(unittest.TestCase):
             with self.subTest(key=key),self.assertRaises(RuntimeError):failure.validate_observation(value,parent(),ready())
         for diag in [{},dict(diagnostics(),private='never-export')]:
             with self.assertRaises(RuntimeError):failure.validate_observation(dict(observation(),alert_diagnostics=diag),parent(),ready())
-        for value in [dict(observation(),schema=1),{k:v for k,v in observation().items() if k!='alert_diagnostics'}]:
+        for value in [dict(observation(),schema=2),{k:v for k,v in observation().items() if k!='alert_diagnostics'}]:
             with self.assertRaises(RuntimeError):failure.validate_observation(value,parent(),ready())
 
     def test_network_scene_and_channel_subset_must_match_no_partial_or_absent_scan_diagnostics(self):
@@ -54,10 +57,11 @@ class AlertDiagnostics(unittest.TestCase):
 
     def test_maximum_original_record_fits_one_read_and_bad_nested_data_never_leaks_or_retries(self):
         value=observation();value['label_counts']=[2]*8;diag=diagnostics()
-        for name in ['text_counts','description_counts','strict_counts']:diag[name]=[2]*50
+        for name in ['text_counts','description_counts','strict_counts','fragment_body_text_counts','fragment_body_description_counts']:diag[name]=[2]*50
+        diag['fragment_header_counts']=diag['fragment_detail_counts']=[2,2]
         diag['known_channel_conflicts']=2;value['alert_diagnostics']=diag
         raw=json.dumps(value).encode();self.assertLess(len(raw),4096)
-        for invalid in [None,raw.replace(b'"schema": 1,',b'"schema": 1, "schema": 1,',1),json.dumps(dict(value,alert_diagnostics=dict(diag,private='private payload'))).encode()]:
+        for invalid in [None,raw.replace(b'"schema": 2,',b'"schema": 2, "schema": 2,',1),json.dumps(dict(value,alert_diagnostics=dict(diag,private='private payload'))).encode()]:
             with tempfile.TemporaryDirectory(prefix='onx-timeout-alert-schema-') as folder:
                 shell=Mock(return_value=SimpleNamespace(returncode=0,stdout=raw if invalid is None else invalid,stderr=b''))
                 subject=SimpleNamespace(shell=shell,output=Path(folder));failure.retain_failure(subject,'original',parent(),ready())
@@ -79,6 +83,19 @@ class AlertDiagnostics(unittest.TestCase):
             self.assertFalse(h.held.release_attempted);self.assertFalse(h.subject.phases)
             stored=json.loads((h.subject.output/'original-driver-failure-observation.json').read_bytes())
             self.assertTrue(stored['available']);self.assertTrue(stored['alert_diagnostics_available']);self.assertFalse(stored['native_timeout_verified'])
+
+    def test_source_fragments_are_unassociated_and_never_change_complete_NETWORK_scene(self):
+        value=observation();diag=diagnostics();value['alert_diagnostics']=diag
+        diag['fragment_body_text_counts'][alerts.NETWORK_INDEX]=1
+        diag['fragment_header_counts']=[1,0];diag['fragment_detail_counts']=[0,1]
+        self.assertEqual(failure.validate_observation(value,parent(),ready()),value)
+        self.assertEqual(value['label_counts'][3],0);self.assertEqual(diag['strict_counts'][alerts.NETWORK_INDEX],0)
+        self.assertTrue(diag['unassociated_source_fragments_only']);self.assertFalse(diag['complete_alert_inferred'])
+        for key,new in [('fragment_catalog_sha256','0'*64),('fragment_body_text_counts',[False]*50),
+                        ('fragment_body_description_counts',[3]*50),('fragment_header_counts',[1]),
+                        ('fragment_detail_counts',[0,True]),('unassociated_source_fragments_only',False),('complete_alert_inferred',True)]:
+            with self.subTest(key=key),self.assertRaises(RuntimeError):
+                failure.validate_observation(dict(value,alert_diagnostics=dict(diag,**{key:new})),parent(),ready())
 
 
 if __name__=='__main__':unittest.main()

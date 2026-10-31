@@ -154,15 +154,24 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
         JSONObject alertFacts=null;
         if(scene!=null && lastAlerts!=null && lastAlertAt==actions.lastSceneAt()) {
             JSONArray texts=new JSONArray(),descriptions=new JSONArray(),strict=new JSONArray();
+            JSONArray bodyTexts=new JSONArray(),bodyDescriptions=new JSONArray(),headers=new JSONArray(),details=new JSONArray();
             for(int n:lastAlerts[0])texts.put(n);
             for(int n:lastAlerts[1])descriptions.put(n);
             for(int n:lastAlerts[2])strict.put(n);
-            alertFacts=new JSONObject().put("schema",1).put("catalog_sha256",ReleaseSyncTimeoutAlerts.CATALOG_SHA256)
+            for(int n:lastAlerts[4])bodyTexts.put(n);
+            for(int n:lastAlerts[5])bodyDescriptions.put(n);
+            for(int n:lastAlerts[6])headers.put(n);
+            for(int n:lastAlerts[7])details.put(n);
+            alertFacts=new JSONObject().put("schema",2).put("catalog_sha256",ReleaseSyncTimeoutAlerts.CATALOG_SHA256)
                 .put("scan_elapsed_ms",lastAlertAt).put("text_counts",texts).put("description_counts",descriptions)
                 .put("strict_counts",strict).put("known_channel_conflicts",lastAlerts[3][0])
+                .put("fragment_catalog_sha256",ReleaseSyncTimeoutAlerts.FRAGMENT_CATALOG_SHA256)
+                .put("fragment_body_text_counts",bodyTexts).put("fragment_body_description_counts",bodyDescriptions)
+                .put("fragment_header_counts",headers).put("fragment_detail_counts",details)
+                .put("unassociated_source_fragments_only",true).put("complete_alert_inferred",false)
                 .put("raw_UI_recorded",false).put("native_timeout_verified",false);
         }
-        write("owned-sync-timeout-"+actions.phase+"-failure-observation.json",new JSONObject().put("schema",2)
+        write("owned-sync-timeout-"+actions.phase+"-failure-observation.json",new JSONObject().put("schema",3)
             .put("phase",actions.phase).put("parent_intent_id",actions.parent).put("input_intent_id",actions.input)
             .put("package",APP).put("uid",originalUid).put("window",originalWindow).put("phase_stage",point)
             .put("original_ready_elapsed_ms",actions.originalReadyAt()).put("input_finished",actions.originalInputFinished())

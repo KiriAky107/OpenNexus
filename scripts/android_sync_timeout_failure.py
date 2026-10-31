@@ -41,7 +41,7 @@ def validate_observation(value,parent,ready):
         'input_finished','last_scene_scan_finished','label_counts','observed_elapsed_ms','count_saturated_at','driver_error_kind',
         'failure_only','native_timeout_verified','raw_UI_recorded','alert_diagnostics'}
     require(type(value) is dict and set(value)==keys,'SYNC_TIMEOUT_FAILURE_OBSERVATION_SCOPE')
-    expected=dict(schema=2,phase=PHASE,parent_intent_id=parent['parent_intent_id'],input_intent_id=parent['input_intent_id'],
+    expected=dict(schema=3,phase=PHASE,parent_intent_id=parent['parent_intent_id'],input_intent_id=parent['input_intent_id'],
         package=APP,uid=ready['uid'],window=ready['window'],original_ready_elapsed_ms=ready['elapsed_ms'],input_finished=True,
         count_saturated_at=2,failure_only=True,native_timeout_verified=False,raw_UI_recorded=False)
     require(parent['phase']==PHASE and all(type(value[k]) is type(v) and value[k]==v for k,v in expected.items())
