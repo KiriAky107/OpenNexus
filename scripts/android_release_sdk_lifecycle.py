@@ -13,6 +13,7 @@ import uuid
 
 import android_release_sdk_archive as kernel
 import android_release_sdk_layout as layout
+import android_release_sdk_ini as ini
 
 require = kernel.require
 PREFIX = 'sdk-'
@@ -549,6 +550,8 @@ def bind_avd(ctx):
     value = dict(owner=ctx['owner'], avd=name, config_sha256=hashlib.sha256(data).hexdigest(),
                  image_properties_sha256=image['image_properties']['sha256'], runtime_verified=False)
     emit(ctx, 'avd-binding', value)
+    try: record_ini_prelaunch(ctx, value, data)
+    except Exception: pass
     return value
 
 
@@ -819,6 +822,55 @@ def owns_dependency_executable(ctx, value):
            path.is_relative_to(ctx['root'] / 'runtime' / package) for package in layout.PACKAGES)
 
 
+def checked_ini_projection(value):
+    keys = {'kind', 'source_bytes', 'source_sha256', 'available', 'canonical_sha256', 'key_count',
+            'image_literal_matches', 'abi_x86_64', 'tag_google_apis', 'unavailable_reason', 'runtime_verified'}
+    require(type(value) is dict and set(value) == keys and value['kind'] == ini.KIND and
+            type(value['source_bytes']) is int and 0 <= value['source_bytes'] <= ini.MAX_BYTES and
+            type(value['source_sha256']) is str and re.fullmatch(r'[0-9a-f]{64}', value['source_sha256']) and
+            type(value['available']) is bool and value['runtime_verified'] is False, 'SDK_AVD_BINDING')
+    if value['available']:
+        require(type(value['canonical_sha256']) is str and re.fullmatch(r'[0-9a-f]{64}', value['canonical_sha256']) and
+                type(value['key_count']) is int and 1 <= value['key_count'] <= ini.MAX_KEYS and
+                all(type(value[k]) is bool for k in ('image_literal_matches', 'abi_x86_64', 'tag_google_apis')) and
+                value['unavailable_reason'] is None, 'SDK_AVD_BINDING')
+    else:
+        require(all(value[k] is None for k in ('canonical_sha256', 'key_count', 'image_literal_matches',
+                'abi_x86_64', 'tag_google_apis')) and value['unavailable_reason'] in
+                ('non_ascii', 'control_byte', 'line_limit', 'assignment', 'key', 'value_remainder',
+                 'duplicate', 'key_limit', 'empty'), 'SDK_AVD_BINDING')
+    return value
+
+
+def record_ini_prelaunch(ctx, binding, data):
+    """Optional diagnostic metadata from the original bind read; never a second config read."""
+    projection = checked_ini_projection(ini.project(ctx, data))
+    require(binding['owner'] == ctx['owner'] and binding['runtime_verified'] is False and
+            projection['source_sha256'] == binding['config_sha256'], 'SDK_AVD_BINDING')
+    emit(ctx, 'avd-config-semantics', dict(owner=ctx['owner'], stage='bind-original-config',
+         avd=binding['avd'], config_sha256=binding['config_sha256'],
+         image_properties_sha256=binding['image_properties_sha256'], projection=projection, runtime_verified=False))
+
+
+def expected_ini_projection(ctx, binding):
+    """One read of the original owned sidecar; absent/unknown metadata stays unavailable."""
+    try:
+        original = read(ctx, 'avd-config-semantics', ('owner', 'stage', 'avd', 'config_sha256',
+                        'image_properties_sha256', 'projection', 'runtime_verified'))
+        require(type(original['owner']['uid']) is int and original['stage'] == 'bind-original-config' and
+                original['avd'] == binding['avd'] == 'opennexus-ci-' + ctx['owner']['GITHUB_RUN_ID'] + '-' +
+                ctx['owner']['GITHUB_RUN_ATTEMPT'] and binding['runtime_verified'] is False and
+                original['runtime_verified'] is False and original['config_sha256'] == binding['config_sha256'] and
+                original['image_properties_sha256'] == binding['image_properties_sha256'] and
+                type(original['image_properties_sha256']) is str and
+                re.fullmatch(r'[0-9a-f]{64}', original['image_properties_sha256']), 'SDK_AVD_BINDING')
+        projection = checked_ini_projection(original['projection'])
+        require(projection['source_sha256'] == binding['config_sha256'], 'SDK_AVD_BINDING')
+        return projection
+    except Exception:
+        return None
+
+
 def avd_config_facts(ctx, data):
     """Only fixed booleans and hashes from the existing read, never config text or paths."""
     require(type(data) is bytes and len(data) <= 65536, 'SDK_AVD_BINDING')
@@ -837,25 +889,36 @@ def avd_config_facts(ctx, data):
     return dict(config_bytes=len(data), observed_config_sha256=hashlib.sha256(data).hexdigest(),
                 config_ascii=ascii_only, selected_keys_unique=all(len(v) == 1 for v in values.values()),
                 image_sysdir_literal_matches=len(values['image.sysdir.1']) == 1 and values['image.sysdir.1'][0] in admitted,
-                abi_x86_64=values['abi.type'] == ['x86_64'], tag_google_apis=values['tag.id'] == ['google_apis'])
+                abi_x86_64=values['abi.type'] == ['x86_64'], tag_google_apis=values['tag.id'] == ['google_apis'],
+                ini_projection=ini.project(ctx, data))
 
 
 def record_avd_binding_failure(ctx, binding, image, avd, observed):
     expected = binding['config_sha256']
     require(type(expected) is str and re.fullmatch(r'[0-9a-f]{64}', expected), 'SDK_AVD_BINDING')
     keys = {'config_bytes', 'observed_config_sha256', 'config_ascii', 'selected_keys_unique',
-            'image_sysdir_literal_matches', 'abi_x86_64', 'tag_google_apis'}
+            'image_sysdir_literal_matches', 'abi_x86_64', 'tag_google_apis', 'ini_projection'}
     if observed is not None:
         require(type(observed) is dict and set(observed) == keys and type(observed['config_bytes']) is int and
                 0 <= observed['config_bytes'] <= 65536 and type(observed['observed_config_sha256']) is str and
                 re.fullmatch(r'[0-9a-f]{64}', observed['observed_config_sha256']) and
-                all(type(observed[k]) is bool for k in keys - {'config_bytes', 'observed_config_sha256'}),
+                all(type(observed[k]) is bool for k in keys - {'config_bytes', 'observed_config_sha256', 'ini_projection'}),
                 'SDK_AVD_BINDING')
+        projection = checked_ini_projection(observed['ini_projection'])
+        require(projection['source_bytes'] == observed['config_bytes'] and
+                projection['source_sha256'] == observed['observed_config_sha256'], 'SDK_AVD_BINDING')
     facts = dict(binding_name_matches=binding['avd'] == avd, binding_runtime_false=binding['runtime_verified'] is False,
                  binding_image_matches=binding['image_properties_sha256'] == image['image_properties']['sha256'],
                  expected_config_sha256=expected, config_read=observed is not None,
                  config_hash_matches=None if observed is None else observed['observed_config_sha256'] == expected)
     facts.update({key: None for key in keys} if observed is None else observed)
+    expected_projection = expected_ini_projection(ctx, binding)
+    facts.update(expected_ini_projection=expected_projection, ini_origin_record_valid=expected_projection is not None,
+                 ini_full_map_equal=None)
+    if expected_projection is not None and expected_projection['available'] and observed is not None and observed['ini_projection']['available']:
+        current = observed['ini_projection']
+        facts['ini_full_map_equal'] = (expected_projection['canonical_sha256'] == current['canonical_sha256'] and
+                                      expected_projection['key_count'] == current['key_count'])
     emit(ctx, 'avd-binding-failure', dict(owner=ctx['owner'], stage='observe-launch-binding',
          guard_code='SDK_AVD_BINDING', facts=facts, whole_passed=False, runtime_verified=False))
 
