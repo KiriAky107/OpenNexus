@@ -21,7 +21,7 @@ from android_sync_fixture import arm_control
 from android_sync_host_touch import retain_post_input_owner
 from android_sync_process_host import _owner,_identity,_query,_reads,_signal,_wait,_stream,process_lifetime
 from android_sync_stop_host import OriginalHeldRevision,canonical,closed_json,record,same_fields,preinstrument_owner,_device_json
-from android_sync_timeout_failure import failure_kind,failure_reason,retain_failure
+from android_sync_timeout_failure import failure_kind,failure_reason,retain_failure,retain_owner_failure
 from android_sync_timeout_owner import release_owner as _release_owner
 
 ENTRY='ReleaseSyncTimeoutRuntimeProbe'
@@ -192,7 +192,17 @@ def run_hosted_timeout_cycle(subject,phase,label,*,held=None):
     with out_path.open('xb') as out,err_path.open('xb') as err:
         try:
             process=subprocess.Popen([str(subject.adb),'-s',subject.args.serial,*arguments],stdout=out,stderr=err)
-            owner=lambda:_owner(subject,process,pid,uid,lifetime)
+            owner_failure=None
+            def owner():
+                nonlocal owner_failure
+                owner_failure=None
+                if phase==TIMEOUT and stage=='original-failed-ready':
+                    checks=[None,None,None]
+                    try:_owner(subject,process,pid,uid,lifetime,boot_root_observation=checks)
+                    except Exception:
+                        owner_failure=(dict(parent),dict(ready),list(checks))
+                        raise
+                else:_owner(subject,process,pid,uid,lifetime)
             stage='original-parent'
             parent=validate_parent(_wait(time.monotonic()+25,owner,lambda:_device_json(_reads(subject),'no_backup/owned-sync-timeout-'+phase+'-intent.json')),phase)
             record(subject.output/(label+'-original-parent.json'),parent)
@@ -266,6 +276,8 @@ def run_hosted_timeout_cycle(subject,phase,label,*,held=None):
             record(subject.output/(label+'-host-failure.json'),dict(stage=stage,error_type=failure_kind(error),automatic_retry=False,
                 whole_timeout_component_passed=False,native_timeout_verified=False,guard_code=failure_reason(error)))
             if phase==TIMEOUT and stage=='original-failed-ready':
+                try:retain_owner_failure(subject,label,parent,ready,owner_failure,error)
+                except Exception:pass  # Optional metadata never replaces or retries the original failure.
                 try:retain_failure(_reads(subject),label,parent,ready)
                 except Exception:pass  # Preserve the original exception and immutable wholefalse.
             raise

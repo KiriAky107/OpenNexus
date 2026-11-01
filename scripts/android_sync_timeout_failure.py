@@ -1,9 +1,11 @@
 """Closed failure facts only; no UI text, AX trees, action retries or new ACKs."""
 import time
 import re
+import hashlib
+import json
 from android_runtime_probe import DRIVER,require
 from android_release_observation import APP
-from android_sync_stop_host import canonical,closed_json,record
+from android_sync_stop_host import canonical,closed_json,record,same_fields
 from android_sync_timeout_alerts import CODES as ALERT_CODES,validate as validate_alerts
 
 PHASE='cycle-timeout-original'
@@ -80,3 +82,45 @@ def retain_failure(subject,label,parent,ready):
         label_order=['failed','disabled_cycle','unconfirmed','network_alert','enabled_stop','completed','stopped','enabled_cycle'],
         alert_kind_order=list(ALERT_CODES),alert_diagnostics_available=value['alert_diagnostics'] is not None,
         failure_only=True,automatic_retry=False,unvalidated_streams_exported=False,native_timeout_verified=False))
+
+
+def owner_failure_observation(checks,parent,ready):
+    """Pure closed projection; no new poll, identity, root or clock sample."""
+    from android_sync_timeout_host import validate_parent,validate_ready
+    validate_parent(parent,PHASE)
+    validate_ready(ready,parent,ready['elapsed_ms'],ready['uid'])
+    require(type(checks) is list and len(checks)==3 and all(v is None or type(v) is bool for v in checks),
+        'SYNC_TIMEOUT_OWNER_FAILURE_CHECK_TYPES')
+    patterns=([False,None,None],[True,False,None],[True,True,False])
+    require(checks in patterns,'SYNC_TIMEOUT_OWNER_FAILURE_CHECK_SEQUENCE')
+    order=['original_driver_alive','same_original_owned_identity','original_root_zero_LF']
+    digest=lambda value:hashlib.sha256((json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\n').encode()).hexdigest()
+    return dict(schema=1,phase=PHASE,phase_stage='original-failed-ready',parent_intent_id=parent['parent_intent_id'],
+        input_intent_id=parent['input_intent_id'],package=APP,uid=ready['uid'],window=ready['window'],
+        original_ready_elapsed_ms=ready['elapsed_ms'],parent_metadata_sha256=digest(parent),ready_metadata_sha256=digest(ready),
+        guard_code='SYNC_PROCESS_OWNED_BOOT_ROOT_OR_DRIVER_CHANGED',check_order=order,check_results=list(checks),
+        first_failed_check=order[checks.index(False)],same_original_guard_observations=True,unexecuted_checks_are_null=True,
+        failure_only=True,whole_timeout_component_passed=False,native_timeout_verified=False,
+        raw_identity_or_root_output_recorded=False,automatic_retry=False)
+
+
+def retain_owner_failure(subject,label,parent,ready,cached,error):
+    """One exclusive metadata write after wholefalse; never replace a guard."""
+    require(type(label) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,47}',label),'SYNC_TIMEOUT_OWNER_FAILURE_LABEL')
+    require(failure_reason(error)=='SYNC_PROCESS_OWNED_BOOT_ROOT_OR_DRIVER_CHANGED',
+        'SYNC_TIMEOUT_OWNER_FAILURE_NOT_COMPOSITE')
+    require(type(cached) is tuple and len(cached)==3 and type(cached[0]) is dict and type(cached[1]) is dict
+        and cached[0]==parent and cached[1]==ready,'SYNC_TIMEOUT_OWNER_FAILURE_CACHE_SCOPE')
+    value=owner_failure_observation(cached[2],cached[0],cached[1])
+    # Bind both current and cached typed metadata; equality alone accepts bools
+    # as integers and must not admit a differently typed caller context.
+    require(value==owner_failure_observation(cached[2],parent,ready),'SYNC_TIMEOUT_OWNER_FAILURE_CONTEXT')
+    record(subject.output/(label+'-host-owner-failure-observation.json'),value)
+
+
+def validate_owner_failure(value,parent,ready):
+    """Validate a future retained original; partial or extra metadata is unknown."""
+    require(type(value) is dict and 'check_results' in value,'SYNC_TIMEOUT_OWNER_FAILURE_RECORD_SCOPE')
+    expected=owner_failure_observation(value['check_results'],parent,ready)
+    require(same_fields(value,expected),'SYNC_TIMEOUT_OWNER_FAILURE_RECORD_CONTEXT')
+    return dict(value)

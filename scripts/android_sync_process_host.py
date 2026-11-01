@@ -133,13 +133,24 @@ def process_lifetime(subject,pid,uid):
     return dict(package=APP,pid=int(pid),uid=uid,start_ticks=int(fields[19]))
 
 
-def _boot_root(subject,process):
-    require(process.poll() is None and _identity(subject)==subject.identity
-        and _query(subject,('id','-u'),16)==b'0\n','SYNC_PROCESS_OWNED_BOOT_ROOT_OR_DRIVER_CHANGED')
+def _boot_root(subject,process,*,observation=None):
+    if observation is None:
+        require(process.poll() is None and _identity(subject)==subject.identity
+            and _query(subject,('id','-u'),16)==b'0\n','SYNC_PROCESS_OWNED_BOOT_ROOT_OR_DRIVER_CHANGED')
+        return
+    require(type(observation) is list and len(observation)==3,'SYNC_PROCESS_BOOT_OBSERVATION_SCOPE')
+    observation[:]=[None,None,None]
+    def note(index,value):
+        observation[index]=value
+        return value
+    # The optional timeout observer reuses each original comparison exactly
+    # once. Short-circuited or unknown reads remain null; no failure requery.
+    require(note(0,process.poll() is None) and note(1,_identity(subject)==subject.identity)
+        and note(2,_query(subject,('id','-u'),16)==b'0\n'),'SYNC_PROCESS_OWNED_BOOT_ROOT_OR_DRIVER_CHANGED')
 
 
-def _owner(subject,process,pid,uid,lifetime):
-    _boot_root(subject,process)
+def _owner(subject,process,pid,uid,lifetime,*,boot_root_observation=None):
+    _boot_root(subject,process,observation=boot_root_observation)
     require(_query(subject,('pidof',APP),64).strip()==pid and ReleaseAuthBackground.app_is_resumed(_reads(subject))
         and product_uid(_query(subject,('pm','list','packages','-U',APP),1024))[0]==uid
         and process_lifetime(subject,pid,uid)==lifetime,'SYNC_PROCESS_ORIGINAL_FOREGROUND_LIFETIME_CHANGED')

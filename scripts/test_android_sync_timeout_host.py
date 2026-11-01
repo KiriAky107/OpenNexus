@@ -290,8 +290,8 @@ class TimeoutHost(unittest.TestCase):
     def test_controlled_300ms_owner_rounds_keep_local_marker_reads_local_and_original_budgets(self):
         with tempfile.TemporaryDirectory() as folder:
             h=Harness(folder);owner=host._owner;release=host._release_owner
-            def observe(*args):
-                result=owner(*args);h.now+=.3;return result
+            def observe(*args,**kwargs):
+                result=owner(*args,**kwargs);h.now+=.3;return result
             def release_observe(*args):
                 result=release(*args);h.now+=.3;return result
             with patch.object(host,'_owner',side_effect=observe),patch.object(host,'_release_owner',side_effect=release_observe):h.execute()
