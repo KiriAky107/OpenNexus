@@ -187,6 +187,7 @@ final class ReleaseSyncTimeoutAlerts {
     static final class Tally {
         private final int[] text=new int[size()],description=new int[size()],strict=new int[size()];
         private final int[] bodyText=new int[size()],bodyDescription=new int[size()],header=new int[2],detail=new int[2];
+        private final int[] nonexactText=new int[size()],nonexactDescription=new int[size()];
         private int conflicts;
         void record(String value,String label) {
             String a=value==null?"":value,b=label==null?"":label;
@@ -203,10 +204,15 @@ final class ReleaseSyncTimeoutAlerts {
             if(HEADER.equals(b))header[1]=Math.min(2,header[1]+1);
             if(DETAIL.equals(a))detail[0]=Math.min(2,detail[0]+1);
             if(DETAIL.equals(b))detail[1]=Math.min(2,detail[1]+1);
+            countNonexact(a,nonexactText);countNonexact(b,nonexactDescription);
+        }
+        private static void countNonexact(String channel,int[] counts) {
+            ReleaseSyncTimeoutAlertWhitespace.Match match=ReleaseSyncTimeoutAlertWhitespace.capture(channel);
+            if(match!=null && !match.rawExact)counts[match.catalogueIndex]=Math.min(2,counts[match.catalogueIndex]+1);
         }
         int[][] snapshot() {
             return new int[][]{text.clone(),description.clone(),strict.clone(),new int[]{conflicts},
-                bodyText.clone(),bodyDescription.clone(),header.clone(),detail.clone()};
+                bodyText.clone(),bodyDescription.clone(),header.clone(),detail.clone(),nonexactText.clone(),nonexactDescription.clone()};
         }
     }
 }

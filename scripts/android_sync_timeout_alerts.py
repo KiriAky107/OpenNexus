@@ -54,6 +54,7 @@ CODES = (
 )
 NETWORK_INDEX = 2
 FRAGMENT_CATALOG_SHA256 = '48e3aa6bf5b911398eb73fe661284644d0e65e82e99f297225feef1a9dee1022'
+WHITESPACE_RULE_ID = 'complete-public-alert-ascii-ws-v1'
 
 
 def validate(value, scene, elapsed):
@@ -63,14 +64,19 @@ def validate(value, scene, elapsed):
     keys = {'schema', 'catalog_sha256', 'scan_elapsed_ms', 'text_counts', 'description_counts',
             'strict_counts', 'known_channel_conflicts', 'raw_UI_recorded', 'native_timeout_verified',
             'fragment_catalog_sha256', 'fragment_body_text_counts', 'fragment_body_description_counts',
-            'fragment_header_counts', 'fragment_detail_counts', 'unassociated_source_fragments_only', 'complete_alert_inferred'}
-    if not (type(value) is dict and set(value) == keys and type(value['schema']) is int and value['schema'] == 2 and
+            'fragment_header_counts', 'fragment_detail_counts', 'unassociated_source_fragments_only', 'complete_alert_inferred',
+            'whitespace_rule_id', 'whitespace_nonexact_text_counts', 'whitespace_nonexact_description_counts',
+            'whitespace_complete_candidates_only', 'whitespace_is_not_admission'}
+    if not (type(value) is dict and set(value) == keys and type(value['schema']) is int and value['schema'] == 3 and
             value['catalog_sha256'] == CATALOG_SHA256 and type(value['scan_elapsed_ms']) is int and
             value['scan_elapsed_ms'] == elapsed and value['raw_UI_recorded'] is False and
             value['native_timeout_verified'] is False and value['fragment_catalog_sha256'] == FRAGMENT_CATALOG_SHA256 and
-            value['unassociated_source_fragments_only'] is True and value['complete_alert_inferred'] is False):
+            value['unassociated_source_fragments_only'] is True and value['complete_alert_inferred'] is False and
+            type(value['whitespace_rule_id']) is str and value['whitespace_rule_id'] == WHITESPACE_RULE_ID and
+            value['whitespace_complete_candidates_only'] is True and value['whitespace_is_not_admission'] is True):
         return False
-    for key in ('text_counts', 'description_counts', 'strict_counts', 'fragment_body_text_counts', 'fragment_body_description_counts'):
+    for key in ('text_counts', 'description_counts', 'strict_counts', 'fragment_body_text_counts', 'fragment_body_description_counts',
+                'whitespace_nonexact_text_counts', 'whitespace_nonexact_description_counts'):
         counts = value[key]
         if not (type(counts) is list and len(counts) == len(CODES) and
                 all(type(n) is int and 0 <= n <= 2 for n in counts)):

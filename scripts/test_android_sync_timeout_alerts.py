@@ -14,11 +14,13 @@ from test_android_sync_timeout_host import parent,ready,Harness
 
 
 def diagnostics():
-    value=dict(schema=2,catalog_sha256=alerts.CATALOG_SHA256,scan_elapsed_ms=32000,
+    value=dict(schema=3,catalog_sha256=alerts.CATALOG_SHA256,scan_elapsed_ms=32000,
         text_counts=[0]*50,description_counts=[0]*50,strict_counts=[0]*50,known_channel_conflicts=0,
         fragment_catalog_sha256=alerts.FRAGMENT_CATALOG_SHA256,fragment_body_text_counts=[0]*50,
         fragment_body_description_counts=[0]*50,fragment_header_counts=[0,0],fragment_detail_counts=[0,0],
         unassociated_source_fragments_only=True,complete_alert_inferred=False,
+        whitespace_rule_id=alerts.WHITESPACE_RULE_ID,whitespace_nonexact_text_counts=[0]*50,
+        whitespace_nonexact_description_counts=[0]*50,whitespace_complete_candidates_only=True,whitespace_is_not_admission=True,
         raw_UI_recorded=False,native_timeout_verified=False)
     # A different complete source-bound UI warning remains diagnostic, not a timeout pass.
     value['text_counts'][0]=value['strict_counts'][0]=1
@@ -57,11 +59,12 @@ class AlertDiagnostics(unittest.TestCase):
 
     def test_maximum_original_record_fits_one_read_and_bad_nested_data_never_leaks_or_retries(self):
         value=observation();value['label_counts']=[2]*8;diag=diagnostics()
-        for name in ['text_counts','description_counts','strict_counts','fragment_body_text_counts','fragment_body_description_counts']:diag[name]=[2]*50
+        for name in ['text_counts','description_counts','strict_counts','fragment_body_text_counts','fragment_body_description_counts',
+                     'whitespace_nonexact_text_counts','whitespace_nonexact_description_counts']:diag[name]=[2]*50
         diag['fragment_header_counts']=diag['fragment_detail_counts']=[2,2]
         diag['known_channel_conflicts']=2;value['alert_diagnostics']=diag
         raw=json.dumps(value).encode();self.assertLess(len(raw),4096)
-        for invalid in [None,raw.replace(b'"schema": 2,',b'"schema": 2, "schema": 2,',1),json.dumps(dict(value,alert_diagnostics=dict(diag,private='private payload'))).encode()]:
+        for invalid in [None,raw.replace(b'"schema": 3,',b'"schema": 3, "schema": 3,',1),json.dumps(dict(value,alert_diagnostics=dict(diag,private='private payload'))).encode()]:
             with tempfile.TemporaryDirectory(prefix='onx-timeout-alert-schema-') as folder:
                 shell=Mock(return_value=SimpleNamespace(returncode=0,stdout=raw if invalid is None else invalid,stderr=b''))
                 subject=SimpleNamespace(shell=shell,output=Path(folder));failure.retain_failure(subject,'original',parent(),ready())
