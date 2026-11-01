@@ -171,13 +171,20 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
                 .put("unassociated_source_fragments_only",true).put("complete_alert_inferred",false)
                 .put("raw_UI_recorded",false).put("native_timeout_verified",false);
         }
-        write("owned-sync-timeout-"+actions.phase+"-failure-observation.json",new JSONObject().put("schema",3)
+        OriginalSyncTimeoutWaitFacts wait=actions.lastWaitFailure();JSONObject waitFacts=null;
+        if(wait!=null)waitFacts=new JSONObject().put("schema",1).put("point",wait.point.name())
+            .put("ready_elapsed_ms",wait.readyElapsedMs).put("previous_elapsed_ms",wait.previousElapsedMs)
+            .put("sampled_elapsed_ms",wait.sampledElapsedMs).put("deadline_elapsed_ms",wait.deadlineElapsedMs)
+            .put("state_observed",wait.stateObserved==null?JSONObject.NULL:wait.stateObserved)
+            .put("original_guard_rejected",true).put("diagnostic_only",true).put("native_timeout_verified",false);
+        write("owned-sync-timeout-"+actions.phase+"-failure-observation.json",new JSONObject().put("schema",4)
             .put("phase",actions.phase).put("parent_intent_id",actions.parent).put("input_intent_id",actions.input)
             .put("package",APP).put("uid",originalUid).put("window",originalWindow).put("phase_stage",point)
             .put("original_ready_elapsed_ms",actions.originalReadyAt()).put("input_finished",actions.originalInputFinished())
             .put("last_scene_scan_finished",scene!=null).put("label_counts",scene==null?JSONObject.NULL:counts)
             .put("observed_elapsed_ms",scene==null?JSONObject.NULL:actions.lastSceneAt()).put("count_saturated_at",2)
             .put("alert_diagnostics",alertFacts==null?JSONObject.NULL:alertFacts)
+            .put("wait_guard_failure",waitFacts==null?JSONObject.NULL:waitFacts)
             .put("driver_error_kind",error instanceof IllegalStateException && "OWNED_SYNC_TIMEOUT_ORIGINAL_SEQUENCE".equals(error.getMessage())?"sequence_guard":"unclassified")
             .put("failure_only",true).put("native_timeout_verified",false).put("raw_UI_recorded",false));
     }

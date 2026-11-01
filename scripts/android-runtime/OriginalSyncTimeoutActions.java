@@ -17,6 +17,7 @@ final class OriginalSyncTimeoutActions {
     private boolean inputFinished,failed,released;
     private int[] observedScene;
     private long observedAt=-1;
+    private OriginalSyncTimeoutWaitFacts waitFailure;
 
     OriginalSyncTimeoutActions(String phase,String parent,String input) {
         need(allowed(phase) && OriginalSyncStopActions.canonical(parent)
@@ -37,9 +38,10 @@ final class OriginalSyncTimeoutActions {
         state=State.INPUT_FINISHED;inputFinished=true;
     }
     void observeFailure(Guard owner,Check exactState,LongSupplier clock,LongConsumer pause) throws Exception {
+        waitFailure=null;
         need(TIMEOUT.equals(phase) && state==State.INPUT_FINISHED);
         try {
-            awaitUntil(owner,exactState,clock,pause,readyAt,FAILURE_WAIT_MS);
+            awaitFailureUntil(owner,exactState,clock,pause,readyAt,FAILURE_WAIT_MS);
             state=State.FAILURE_OBSERVED;failed=true;
         } catch(Exception error) {state=State.UNKNOWN;throw error;}
     }
@@ -64,6 +66,7 @@ final class OriginalSyncTimeoutActions {
     long lastSceneAt() {return observedAt;}
     long originalReadyAt() {return readyAt;}
     boolean originalInputFinished() {return inputFinished;}
+    OriginalSyncTimeoutWaitFacts lastWaitFailure() {return waitFailure;}
     void close() {if(state!=State.COMPLETE)state=State.UNKNOWN;}
     String summary() {
         return "input_finished="+inputFinished+" failed_cycle_UI_observed="+failed+" network_error_UI_observed="+failed
@@ -88,6 +91,22 @@ final class OriginalSyncTimeoutActions {
             }
             need(now<until);pause.accept(50);
         }
+    }
+    private void awaitFailureUntil(Guard owner,Check state,LongSupplier clock,LongConsumer pause,long start,long bound) throws Exception {
+        need(start>=0 && start<=Long.MAX_VALUE-bound);long last=start,until=start+bound;
+        while(true) {
+            long now=clock.getAsLong();needWait(now>=last && now<=until,OriginalSyncTimeoutWaitFacts.Point.BEFORE_OWNER,last,now,until,null);last=now;
+            owner.check();now=clock.getAsLong();needWait(now>=last && now<=until,OriginalSyncTimeoutWaitFacts.Point.AFTER_OWNER,last,now,until,null);last=now;
+            boolean observed=state.observed();now=clock.getAsLong();needWait(now>=last && now<=until,OriginalSyncTimeoutWaitFacts.Point.AFTER_SCENE,last,now,until,observed);last=now;
+            if(observed) {
+                owner.check();now=clock.getAsLong();needWait(now>=last && now<=until,OriginalSyncTimeoutWaitFacts.Point.AFTER_FINAL_OWNER,last,now,until,Boolean.TRUE);return;
+            }
+            needWait(now<until,OriginalSyncTimeoutWaitFacts.Point.SCENE_FALSE_AT_DEADLINE,last,now,until,Boolean.FALSE);pause.accept(50);
+        }
+    }
+    private void needWait(boolean value,OriginalSyncTimeoutWaitFacts.Point point,long previous,long sampled,long deadline,Boolean observed) {
+        if(!value)waitFailure=OriginalSyncTimeoutWaitFacts.capture(false,point,readyAt,previous,sampled,deadline,observed);
+        need(value);
     }
     private static void need(boolean value) {
         if(!value)throw new IllegalStateException("OWNED_SYNC_TIMEOUT_ORIGINAL_SEQUENCE");
