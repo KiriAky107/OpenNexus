@@ -164,7 +164,7 @@ def stop_completed_phase(subject):
         held=subject.timeout_control.held
         require(held is not None and held.release_attempted and held.release_control is not None,
             'SYNC_TIMEOUT_SNAPSHOT_STOP_ORIGINAL_RELEASE_MISSING')
-        keys=('original-parent','ready','failed-ready','original-lifetime','input-owner','input-owner-at-command','host-phase-intent',
+        keys=('original-parent','ready','preinput-current-fit','failed-ready','original-lifetime','input-owner','input-owner-at-command','host-phase-intent',
             'host-touch-intent','host-touch-result','host-touch-after-input-owner','original-window','failure-clock','held-service-marker',
             'original-response-release','release-control-intent','release-control-attempt','release-control-receipt',
             'input-finish-intent','input-finish-result','input-finish-readback','released-intent','released-result','released-readback','instrument-result')

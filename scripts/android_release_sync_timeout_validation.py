@@ -8,6 +8,7 @@ from android_release_observation import APP
 from android_sync_timeout_host import TIMEOUT, ENTRY, validate_parent, validate_ready, validate_failed, _approved_stdout
 from android_runtime_probe import BODY, DRIVER, require
 from android_sync_stop_host import same_fields
+from android_sync_timeout_preinput import validate_wire as validate_preinput_wire
 
 
 def validate_controls(hold, held, release, released):
@@ -50,6 +51,8 @@ def validate_host(phase, records, stdout, hold, release):
             and type(life['start_ticks']) is int and 0 < life['start_ticks'] < 2**64,
             'RELEASE_SYNC_TIMEOUT_HOST_ORIGINAL_LIFETIME')
     validate_ready(ready, parent, ready['elapsed_ms'], life['uid'])
+    require(validate_preinput_wire(dict(schema=2,original_ready=ready,preinput_current_fit=records.get('preinput-current-fit')),
+            parent,life['uid']) is not None,'RELEASE_SYNC_TIMEOUT_HOST_PREINPUT_LINEAGE')
     for key in ('input-owner','input-owner-at-command'):
         owner = records[key]
         expected = dict(original_lifetime=life,same_original_foreground_PID_UID_boot=True,

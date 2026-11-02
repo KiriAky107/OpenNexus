@@ -8,6 +8,7 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.json.JSONArray;
@@ -18,10 +19,15 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
     private static final String DRIVER="cc.kronecker.opennexus.testdriver";
     private static final String UNKNOWN="The previous outcome is not fully confirmed. Read the queue and original records before explicitly continuing; no new operation is sent automatically.";
     private static final String NETWORK="Last recorded sync error · Cannot reach the service. Check the network and service address. (SYNC_NETWORK_ERROR)";
+    private static final String DETAIL_FOOTER="A successful cycle does not mean the queue is empty. Receiving download bytes does not mean verification succeeded; review conflicts separately.";
     private OriginalSyncTimeoutActions actions;
     private int originalWindow=-1,originalUid=-1;
     private int[][] lastAlerts;
     private long lastAlertAt=-1;
+    private OriginalSyncTimeoutPreinputFlow preinput;
+    private OriginalSyncTimeoutPreinputFlow.Frame lastPreinputFrame;
+    private AccessibilityNodeInfo lastPreinputSection;
+    private boolean preinputClosed,preinputRevealInvoked;
     public ReleaseSyncTimeoutRuntimeProbe() {super(true);}
     @Override public void onCreate(Bundle args) {
         if(args==null || args.size()!=1 || !OriginalSyncTimeoutActions.allowed(args.getString("phase",""))) {
@@ -43,6 +49,7 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
         try {
             readCurrent();signedIn();click("Read queue and original records");
             waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
+            if(OriginalSyncTimeoutActions.TIMEOUT.equals(phase))prepareCurrentPublicRegion();
             actions.begin(actions.expectedAction());click("Sync one cycle now");
             if(OriginalSyncTimeoutActions.RESUME.equals(phase)) {
                 stage="timeout-original-explicit-read-result";waitPresent(node->label(node,"Cycle completed"));
@@ -77,14 +84,23 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
     @Override protected void awaitHostedCycleTouch(Rect original,Rect visible,int window) {
         try {
             require(actions!=null,"Unscoped original timeout input");guardOwner(window,visible);
+            if(OriginalSyncTimeoutActions.TIMEOUT.equals(actions.phase)) {
+                require(preinput!=null && !preinputClosed,"Timeout preinput preparation unavailable");
+                preinput.finalCheck(rectangle(original),rectangle(visible),window);preinputClosed=true;
+            }
             JSONArray full=new JSONArray(),hit=new JSONArray();
             for(int n:new int[]{original.left,original.top,original.right,original.bottom})full.put(n);
             for(int n:new int[]{visible.left,visible.top,visible.right,visible.bottom})hit.put(n);
             long elapsed=SystemClock.elapsedRealtime();actions.ready(elapsed);
-            write("owned-sync-timeout-"+actions.phase+"-"+actions.expectedAction()+"-ready.json",new JSONObject().put("schema",1)
+            JSONObject ready=new JSONObject().put("schema",1)
                 .put("phase",actions.phase).put("action",actions.expectedAction()).put("parent_intent_id",actions.parent)
                 .put("driver_intent_id",actions.input).put("package",APP).put("uid",originalUid).put("window",window)
-                .put("original",full).put("visible",hit).put("x",visible.centerX()).put("y",visible.centerY()).put("elapsed_ms",elapsed));
+                .put("original",full).put("visible",hit).put("x",visible.centerX()).put("y",visible.centerY()).put("elapsed_ms",elapsed);
+            String readyName="owned-sync-timeout-"+actions.phase+"-"+actions.expectedAction()+"-ready.json";
+            if(OriginalSyncTimeoutActions.TIMEOUT.equals(actions.phase))
+                OriginalSyncStopActions.writeOnce(new File(getContext().getNoBackupFilesDir(),readyName),
+                    preinput.readyBytes(originalUid,window,rectangle(original),rectangle(visible),visible.centerX(),visible.centerY(),elapsed));
+            else write(readyName,ready);
             File finish=new File(getContext().getNoBackupFilesDir(),"owned-sync-timeout-touch-"+actions.input+".finish");
             OriginalSyncTimeoutActions.awaitSignal(finish,()->guardOwner(window,null),SystemClock::elapsedRealtime,SystemClock::sleep,OriginalSyncTimeoutActions.INPUT_WAIT_MS);
             actions.finished(actions.expectedAction());
@@ -92,6 +108,108 @@ public final class ReleaseSyncTimeoutRuntimeProbe extends SyncRuntimeProbe {
     }
     private void guardDriver() {
         require(DRIVER.equals(getContext().getPackageName()) && DRIVER.equals(getTargetContext().getPackageName()),"Timeout instrumentation target changed");
+    }
+    private void prepareCurrentPublicRegion() throws Exception {
+        stage="timeout-preinput-current-public-region";
+        File root=getContext().getNoBackupFilesDir();
+        for(String suffix:new String[]{"viewport-intent.json","viewport-attempt.json","cycle-start-ready.json"}) {
+            File file=new File(root,"owned-sync-timeout-"+actions.phase+"-"+suffix);
+            require(!file.exists() && !Files.isSymbolicLink(file.toPath()),"Timeout preinput original already exists");
+        }
+        preinput=OriginalSyncTimeoutPreinputFlow.prepare(actions.parent,actions.input,new OriginalSyncTimeoutPreinputFlow.Port() {
+            public OriginalSyncTimeoutPreinputFlow.Frame read() throws Exception {return preinputFrame();}
+            public long uptime() {require(!preinputClosed,"Timeout preinput clock closed");return SystemClock.uptimeMillis();}
+            public void pause(long millis) {require(!preinputClosed && millis==50,"Timeout preinput pause refused");SystemClock.sleep(millis);}
+            public void write(OriginalSyncTimeoutPreinputFlow.Record record,byte[] bytes) throws Exception {
+                require(!preinputClosed && bytes!=null && bytes.length>0 && bytes.length<=4096 && record!=null,"Timeout preinput write refused");
+                String suffix=record==OriginalSyncTimeoutPreinputFlow.Record.INTENT?"viewport-intent.json":"viewport-attempt.json";
+                OriginalSyncStopActions.writeOnce(new File(getContext().getNoBackupFilesDir(),"owned-sync-timeout-"+actions.phase+"-"+suffix),bytes);
+            }
+            public boolean revealSection(long previous,long deadline) throws Exception {return revealCurrentSection(previous,deadline);}
+        });
+    }
+    private OriginalSyncTimeoutPreinputFlow.Frame preinputFrame() throws Exception {
+        require(!preinputClosed && actions!=null && OriginalSyncTimeoutActions.TIMEOUT.equals(actions.phase),"Timeout preinput reads closed");
+        android.app.UiAutomation current=getUiAutomation();AccessibilityNodeInfo root=current.getRootInActiveWindow();
+        require(root!=null && APP.equals(text(root.getPackageName())) && !root.isPassword(),"Timeout preinput root unavailable");
+        int window=root.getWindowId();guardOwner(window,null);
+        List<AccessibilityNodeInfo> all=nodes(),buttons=new ArrayList<>(),sections=new ArrayList<>(),footers=new ArrayList<>();
+        require(all.size()<2500,"Timeout preinput tree incomplete");
+        for(AccessibilityNodeInfo node:all) {
+            if(!APP.equals(text(node.getPackageName())) || node.getWindowId()!=window || node.isPassword() || node.isEditable())continue;
+            String value=text(node.getText()),description=text(node.getContentDescription());
+            if(preinputLabel(value,description,"Sync one cycle now") && node.isEnabled()) {
+                AccessibilityNodeInfo target=node.isClickable()?node:node.getParent();
+                if(target!=null && APP.equals(text(target.getPackageName())) && target.getWindowId()==window
+                        && !target.isPassword() && !target.isEditable() && target.isEnabled() && target.isClickable()
+                        && !buttons.contains(target))buttons.add(target);
+            }
+            if(preinputLabel(value,description,"Sync details") && !sections.contains(node))sections.add(node);
+            if(preinputLabel(value,description,DETAIL_FOOTER))footers.add(node);
+        }
+        require(buttons.size()==1,"Timeout preinput original button ambiguous");
+        List<AccessibilityNodeInfo> containers=new ArrayList<>();
+        for(AccessibilityNodeInfo section:sections)for(AccessibilityNodeInfo footer:footers)
+            if(ownedAncestor(footer,section,window) && contains(rectangle(section),rectangle(footer)) && !containers.contains(section))containers.add(section);
+        require(containers.size()==1,"Timeout preinput complete section unavailable");
+        AccessibilityNodeInfo button=buttons.get(0),section=containers.get(0);
+        require(button.isVisibleToUser(),"Timeout preinput original button hidden");
+        List<AccessibilityWindowInfo> windows=current.getWindows();AccessibilityWindowInfo own=null;int count=0;
+        for(AccessibilityWindowInfo candidate:windows) {
+            require(candidate.getType()!=AccessibilityWindowInfo.TYPE_INPUT_METHOD,"Timeout preinput keyboard visible");
+            if(candidate.getId()==window) {own=candidate;count++;}
+        }
+        require(count==1 && own!=null && own.isActive() && own.isFocused()
+            && own.getType()==AccessibilityWindowInfo.TYPE_APPLICATION && own.getDisplayId()==0,"Timeout preinput window changed");
+        Rect owned=new Rect();own.getBoundsInScreen(owned);int[] viewport=bounded(owned);
+        int[] b=rectangle(button),s=rectangle(section),bc=preinputClip(button,viewport,windows,own),sc=preinputClip(section,viewport,windows,own);
+        require(bc!=null && sc!=null && (section.isVisibleToUser() || !contains(sc,s)),"Timeout preinput visibility unknown");
+        lastPreinputSection=section;
+        lastPreinputFrame=new OriginalSyncTimeoutPreinputFlow.Frame(originalUid,window,viewport,b,bc,s,sc);
+        return lastPreinputFrame;
+    }
+    private boolean revealCurrentSection(long previous,long deadline) throws Exception {
+        require(!preinputClosed && !preinputRevealInvoked && lastPreinputFrame!=null,"Timeout preinput reveal reentry");
+        preinputRevealInvoked=true;OriginalSyncTimeoutPreinputFlow.Frame expected=lastPreinputFrame;
+        OriginalSyncTimeoutPreinputFlow.Frame fresh=preinputFrame();
+        require(expected.same(fresh),"Timeout preinput section moved before reveal");
+        long now=SystemClock.uptimeMillis();
+        require(previous>=0 && previous<=now && now<=deadline && deadline-previous<=5000,"Timeout preinput reveal late");
+        return lastPreinputSection.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId());
+    }
+    private static boolean preinputLabel(String value,String description,String label) {
+        return (label.equals(value) || label.equals(description))
+            && (value.isEmpty() || label.equals(value)) && (description.isEmpty() || label.equals(description));
+    }
+    private boolean ownedAncestor(AccessibilityNodeInfo child,AccessibilityNodeInfo ancestor,int window) {
+        int depth=0;
+        for(AccessibilityNodeInfo node=child.getParent();node!=null && depth++<32;node=node.getParent()) {
+            if(!APP.equals(text(node.getPackageName())) || node.getWindowId()!=window || node.isPassword() || node.isEditable())return false;
+            if(node.equals(ancestor))return true;
+        }
+        return false;
+    }
+    private int[] preinputClip(AccessibilityNodeInfo node,int[] viewport,List<AccessibilityWindowInfo> windows,AccessibilityWindowInfo own) {
+        int[] clip=viewport.clone();int depth=0;
+        for(AccessibilityNodeInfo parent=node.getParent();parent!=null;parent=parent.getParent()) {
+            require(depth++<32 && APP.equals(text(parent.getPackageName())) && parent.getWindowId()==own.getId()
+                && !parent.isPassword() && !parent.isEditable(),"Timeout preinput clip lineage changed");
+            if(parent.isScrollable() || "android.webkit.WebView".equals(text(parent.getClassName())))clip=TouchViewport.intersect(clip,rectangle(parent));
+            if(clip==null)return null;
+        }
+        for(AccessibilityWindowInfo other:windows)if(other.getId()!=own.getId() && other.getDisplayId()==0 && other.getLayer()>=own.getLayer()) {
+            Rect covered=new Rect();other.getBoundsInScreen(covered);clip=TouchViewport.avoid(clip,bounded(covered));if(clip==null)return null;
+        }
+        return clip;
+    }
+    private static int[] rectangle(AccessibilityNodeInfo node) {Rect value=new Rect();node.getBoundsInScreen(value);return bounded(value);}
+    private static int[] rectangle(Rect value) {return new int[]{value.left,value.top,value.right,value.bottom};}
+    private static int[] bounded(Rect value) {
+        int[] rect=rectangle(value);for(int n:rect)require(n>=0 && n<=16384,"Timeout preinput geometry outside ready bounds");
+        require(rect[0]<rect[2] && rect[1]<rect[3],"Timeout preinput geometry empty");return rect;
+    }
+    private static boolean contains(int[] outer,int[] inner) {
+        return outer[0]<=inner[0] && outer[1]<=inner[1] && inner[2]<=outer[2] && inner[3]<=outer[3];
     }
     private void guardOwner(int window,Rect region) throws Exception {
         actions.beforeProductUi();guardDriver();require(APP.equals("cc.kronecker.opennexus"),"Timeout APP identity changed");

@@ -23,6 +23,7 @@ from android_sync_process_host import _owner,_identity,_query,_reads,_signal,_wa
 from android_sync_stop_host import OriginalHeldRevision,canonical,closed_json,record,same_fields,preinstrument_owner,_device_json
 from android_sync_timeout_failure import failure_kind,failure_reason,retain_failure,retain_owner_failure
 from android_sync_timeout_owner import release_owner as _release_owner
+from android_sync_timeout_preinput import validate_wire as validate_preinput_wire
 
 ENTRY='ReleaseSyncTimeoutRuntimeProbe'
 TIMEOUT,RESUME='cycle-timeout-original','cycle-after-timeout-original'
@@ -208,8 +209,15 @@ def run_hosted_timeout_cycle(subject,phase,label,*,held=None):
             record(subject.output/(label+'-original-parent.json'),parent)
             stage='original-ready';action='cycle-start' if phase==TIMEOUT else 'cycle-resume'
             ready=_wait(time.monotonic()+10,owner,lambda:_device_json(_reads(subject),'no_backup/owned-sync-timeout-'+phase+'-'+action+'-ready.json'))
-            elapsed,_,_= _clock_sample(subject);ready=validate_ready(ready,parent,elapsed,uid)
-            record(subject.output/(label+'-ready.json'),ready);owner();elapsed,_,_=_clock_sample(subject);validate_ready(ready,parent,elapsed,uid)
+            elapsed,_,_= _clock_sample(subject)
+            if phase==TIMEOUT:
+                wire=validate_preinput_wire(ready,parent,uid)
+                require(wire is not None,'SYNC_TIMEOUT_PREINPUT_WIRE_REFUSED')
+                ready=wire['original_ready']
+            ready=validate_ready(ready,parent,elapsed,uid)
+            record(subject.output/(label+'-ready.json'),ready)
+            if phase==TIMEOUT:record(subject.output/(label+'-preinput-current-fit.json'),wire['preinput_current_fit'])
+            owner();elapsed,_,_=_clock_sample(subject);validate_ready(ready,parent,elapsed,uid)
             record(subject.output/(label+'-input-owner.json'),dict(original_lifetime=lifetime,same_original_foreground_PID_UID_boot=True,
                 original_instrumentation_alive=True,ready_age_ms=elapsed-ready['elapsed_ms'],ready_age_bound_ms=2000,native_cycle_acknowledged=False))
             preinput_elapsed=elapsed;start=time.monotonic();deadline=start+HOLD_MS/1000

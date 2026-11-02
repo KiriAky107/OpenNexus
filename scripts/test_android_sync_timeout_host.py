@@ -1,6 +1,7 @@
 """Actual original recorders/CAS and read guards; device, UI and elapsed clocks are fixtures."""
 from copy import deepcopy
 import json
+import hashlib
 from pathlib import Path
 import shlex
 import subprocess
@@ -26,6 +27,23 @@ def parent(phase=host.TIMEOUT):
 def ready(phase=host.TIMEOUT):
     return dict(schema=1,phase=phase,action='cycle-start' if phase==host.TIMEOUT else 'cycle-resume',parent_intent_id=P,
         driver_intent_id=A,package=host.APP,uid=12345,window=4,original=[100,200,500,600],visible=[100,200,500,600],x=300,y=400,elapsed_ms=1000)
+
+
+def preinput_wire(original_parent,original_ready):
+    """Closed synthetic metadata for the new TIMEOUT wire; no real geometry/writes."""
+    def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()).hexdigest()
+    common=dict(schema=1,policy_id='timeout-preinput-current-public-region-v1',phase=host.TIMEOUT,
+        parent_intent_id=original_parent['parent_intent_id'],input_intent_id=original_parent['input_intent_id'],package=host.APP,
+        uid=original_ready['uid'],window=original_ready['window'],started_uptime_ms=1000,
+        raw_UI_or_section_geometry_recorded=False,automatic_retry=False)
+    intent=dict(common,preinput_only=True,section_reveal_limit=1,native_timeout_verified=False)
+    envelope=dict(common,parent_metadata_canonical_sha256=digest(original_parent),ready_metadata_canonical_sha256=digest(original_ready),
+        final_sample_uptime_ms=1600,intent_written=dict(metadata=intent,raw_sha256=digest(intent),writer_returned=True),
+        attempt_written=None,reveal_returned=None,preparation_budget_ms=5000,stable_policy_ms=600,min_samples_policy=3,
+        section_reveal_limit=1,current_pair_stable_reported=True,final_original_button_hit_and_pair_checked_before_ready=True,
+        current_geometry_only=True,future_warning_visibility_guaranteed=False,network_admission=False,native_timeout_verified=False,
+        stable_geometry_duration_independently_recomputed=False)
+    return dict(schema=2,original_ready=original_ready,preinput_current_fit=envelope)
 
 
 class Harness(OriginalHarness):
@@ -73,6 +91,7 @@ class Harness(OriginalHarness):
                 if self.variant=='bad-ready-schema':value['schema']=True
                 if self.variant=='bad-ready-UID':value['uid']=12346
                 if self.variant=='bad-ready-geometry':value['x']=301
+                if self.phase==host.TIMEOUT:value=preinput_wire(parent(self.phase),value)
             if self.variant=='partial-ready' and self.partial_reads<2:
                 self.partial_reads+=1;return result(b'' if self.partial_reads==1 else b'{"schema":')
             return result(json.dumps(value,separators=(',',':')).encode())
