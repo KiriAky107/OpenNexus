@@ -15,6 +15,8 @@ import android_release_sdk_archive as kernel
 import android_release_sdk_layout as layout
 import android_release_sdk_ini as ini
 import android_release_sdk_config_owned as config_owned
+import android_release_sdk_proc_facts as proc_facts
+import android_release_sdk_proc_observation as proc_observation
 
 require = kernel.require
 PREFIX = 'sdk-'
@@ -106,6 +108,31 @@ def read(ctx, name, keys):
                         object_pairs_hook=pairs, parse_constant=constant)
     require(type(result) is dict and set(result) == set(keys) and result.get('owner') == ctx['owner'], 'SDK_JSON')
     return result
+
+
+def read_launch_for_cleanup(ctx):
+    """Original closed read once; optional SHA uses that same admitted buffer."""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result, 'SDK_JSON'); result[key] = value
+        return result
+    def constant(_): raise kernel.ArchiveError('SDK_JSON')
+    data = raw_file(ctx['evidence'] / 'sdk-launch-observed.json')
+    result = json.loads(data, object_pairs_hook=pairs, parse_constant=constant)
+    keys = ('owner', 'pid', 'uid', 'start_ticks', 'runtime_verified')
+    require(type(result) is dict and set(result) == set(keys) and result.get('owner') == ctx['owner'], 'SDK_JSON')
+    try:
+        digest = hashlib.sha256(data).hexdigest()
+    except Exception:
+        digest = None
+    return result, digest
+
+
+def read_cleanup_proc_failure(ctx, previous, launch_sha, result):
+    value = read(ctx, proc_observation.NAME, proc_observation.KEYS)
+    require(proc_observation.validate(value, ctx['owner'], previous, launch_sha, result), 'SDK_JSON')
+    return value
 
 
 def fingerprint(path):
@@ -747,7 +774,10 @@ def probe(ctx):
     return result
 
 
-def proc(pid):
+def proc(pid, *, observation=None):
+    if type(observation) is proc_observation.Observer:
+        observation.fact = None
+        return _observed_proc(pid, observation)
     require(type(pid) is int and 1 <= pid <= 4194304, 'SDK_LAUNCH_PID')
     path = Path('/proc') / str(pid)
     try:
@@ -763,6 +793,37 @@ def proc(pid):
         return dict(pid=pid, uid=before.st_uid, start_ticks=int(fields[19]), state=state, executable=executable)
     except FileNotFoundError:
         require(not path.exists(), 'SDK_PROC_UNKNOWN')
+        return None
+
+
+def _observed_proc(pid, observation):
+    """Same original read sequence; only cache the rejected existing comparison."""
+    require(type(pid) is int and 1 <= pid <= 4194304, 'SDK_LAUNCH_PID')
+    path = Path('/proc') / str(pid)
+    step = None
+    try:
+        step = 'DIRECTORY_BEFORE_STAT'
+        before = path.stat()
+        step = 'FIRST_STAT_READ'
+        first = (path / 'stat').read_bytes()
+        require(len(first) <= 4096 and first.startswith((str(pid) + ' (').encode()), 'SDK_PROC_IDENTITY')
+        fields = first.rsplit(b') ', 1)[1].split()
+        require(len(fields) >= 20 and fields[19].isdigit() and int(fields[19]) > 0, 'SDK_PROC_IDENTITY')
+        state = fields[0].decode('ascii')
+        step = 'EXECUTABLE_READLINK' if state != 'Z' else step
+        executable = os.readlink(path / 'exe') if state != 'Z' else None
+        step = 'SECOND_STAT_READ'
+        second = (path / 'stat').read_bytes().rsplit(b') ', 1)[1].split()
+        step = 'DIRECTORY_AFTER_STAT'
+        require(second[19] == fields[19] and path.stat().st_uid == before.st_uid, 'SDK_PROC_IDENTITY')
+        return dict(pid=pid, uid=before.st_uid, start_ticks=int(fields[19]), state=state, executable=executable)
+    except FileNotFoundError as error:
+        exists = path.exists()
+        try:
+            observation.fact = proc_facts.capture(step, type(error) is FileNotFoundError, exists)
+        except Exception:
+            pass
+        require(not exists, 'SDK_PROC_UNKNOWN')
         return None
 
 
@@ -1042,6 +1103,13 @@ def cleanup(ctx):
     emit(ctx, 'cleanup-intent', dict(owner=ctx['owner'], automatic_retry=False, no_stop_or_kill=True))
     result = dict(owner=ctx['owner'], passed=False, no_stop_or_kill=True, runtime_verified=False)
     stage = 'preparation-record'
+    observation = None
+    try:
+        observation = proc_observation.Observer()
+    except Exception:
+        pass
+    previous = None
+    launch_sha = None
     try:
         value = read(ctx, 'prepare-result', ('owner', 'passed', 'root_identity', 'launcher', 'kernel_sha256', 'runtime_verified'))
         stage = 'kernel-record'
@@ -1056,7 +1124,7 @@ def cleanup(ctx):
             previous = None
             stage = 'original-pid-record'
             if (ctx['evidence'] / 'sdk-launch-observed.json').exists():
-                previous = read(ctx, 'launch-observed', ('owner', 'pid', 'uid', 'start_ticks', 'runtime_verified'))
+                previous, launch_sha = read_launch_for_cleanup(ctx)
                 require(type(previous['pid']) is int and 1 <= previous['pid'] <= 4194304 and
                         previous['uid'] == ctx['owner']['uid'] and type(previous['start_ticks']) is int and
                         previous['start_ticks'] > 0 and previous['runtime_verified'] is False, 'SDK_PROC_IDENTITY')
@@ -1070,7 +1138,7 @@ def cleanup(ctx):
                 stage = 'host-boot'
                 require(boot() == ctx['owner']['host_boot_id'], 'SDK_BOOT')
                 stage = 'original-pid'
-                current = proc(previous['pid']) if previous else None
+                current = proc(previous['pid'], observation=observation) if previous else None
                 if current is not None:
                     require(current['uid'] == previous['uid'] and current['start_ticks'] == previous['start_ticks'],
                             'SDK_ORIGINAL_PID_REUSED')
@@ -1108,6 +1176,12 @@ def cleanup(ctx):
                 type(error), 'unclassified')
         result.setdefault('SDK_removed_here', False)
     emit(ctx, 'cleanup-result', result)
+    try:
+        metadata = proc_observation.project(observation, ctx['owner'], previous, launch_sha, result)
+        if metadata is not None:
+            emit(ctx, proc_observation.NAME, metadata)
+    except Exception:
+        pass
     return result
 
 
