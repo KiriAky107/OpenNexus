@@ -95,12 +95,14 @@ class NormalOnly:
 
 @closed_errors
 def build_app(owner):
-    _,_,config = _owned(owner)
+    run,_,config = _owned(owner)
     from sync_server.__main__ import Database, S3Objects, create_app, operations_path
     env = config['environment']
     app = create_app(Database(env['SYNC_DATABASE_URL']), S3Objects(env['SYNC_S3_ENDPOINT'], env['SYNC_S3_BUCKET']),
         Path(env['SYNC_STAGING_DIR']), quota=validation.QUOTA, operations_path=operations_path(), operator_user_ids=())
-    return NormalOnly(auth.DeliveryProxy(sync.TargetedDeliveryProxy(app, owner, uploads=True), owner), owner)
+    from android_release_sync_quota_upload import ObserveUpload
+    original = auth.DeliveryProxy(sync.TargetedDeliveryProxy(app, owner, uploads=True), owner)
+    return NormalOnly(ObserveUpload(original, owner, owner_run=run), owner)
 
 
 def proof_shape(value, run, state):
