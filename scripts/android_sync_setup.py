@@ -30,8 +30,11 @@ class Setup:
         device=original.read_json(owner/'device-private.json')
         endpoint=state.get('endpoint','')
         original.require(state.get('source')==original.SERVICE_SHA and state.get('result')=='ready'
-            and state.get('fixture') in ('sync','sync-expiration','sync-quota') and re.fullmatch(r'https://[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com',endpoint)
+            and state.get('fixture') in ('sync','sync-expiration','sync-quota','signed-release-quota32') and re.fullmatch(r'https://[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com',endpoint)
             and device=={'endpoint':endpoint,'accounts':config['accounts']},'OWNED_SYNC_SETUP_SCOPE_INVALID')
+        if state.get('fixture') == 'signed-release-quota32':
+            from android_release_sync_quota_fixture import require_prepare_proof
+            require_prepare_proof(owner, state=state, config=config)
         self.owner,self.endpoint=owner,endpoint
         self.account=config['accounts'][0]
         original.require(re.fullmatch(r'android-owned-a-[0-9a-f]{12}',self.account['username'])
