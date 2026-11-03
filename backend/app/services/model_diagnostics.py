@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from app.database.db import connect, transaction
 
 TEXT = {"model", "revision", "operation", "source", "requested_device", "actual_device",
-        "attempted_device", "fallback_reason", "error_code", "status", "request_id", "attempt_id"}
+        "attempted_device", "fallback_reason", "error_code", "status", "request_id", "attempt_id",
+        "worker_exit_code"}
 NUMBERS = {"load_seconds", "inference_seconds", "elapsed_seconds", "peak_memory_bytes", "queue_seconds"}
 
 
