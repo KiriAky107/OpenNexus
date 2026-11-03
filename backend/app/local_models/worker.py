@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import sys
@@ -211,6 +212,25 @@ class CudaInitializationError(RuntimeError):
     pass
 
 
+def inference_failure(exc, request):
+    # Windows can reject the weights mapping before inference starts. Do not
+    # import torch again on this path, or expose the exception's private path.
+    if isinstance(exc, MemoryError) or (
+        isinstance(exc, OSError)
+        and (getattr(exc, "winerror", None) == 1455 or exc.errno == errno.ENOMEM)
+    ):
+        return {"error_code": "LOCAL_SYSTEM_MEMORY_INSUFFICIENT",
+                "message": "系统可用内存或提交内存不足，无法完成本地推理。请保存并关闭暂不用的程序后重试。"}
+    import torch
+    cuda_failure = isinstance(exc, CudaInitializationError)
+    cuda_oom = request.get("_actual_device") == "cuda:0" and isinstance(exc, torch.cuda.OutOfMemoryError)
+    if cuda_failure or cuda_oom:
+        return {"error_code": "LOCAL_CUDA_OOM" if cuda_oom else "LOCAL_CUDA_INIT_FAILED",
+                "message": "CUDA 运行失败，将释放进程并重试 CPU。"}
+    return {"error_code": "LOCAL_INFERENCE_FAILED",
+            "message": "本地推理失败，请检查媒体格式、模型和设备配置。"}
+
+
 def run(request):
     import torch
     import psutil
@@ -312,14 +332,7 @@ if __name__ == "__main__":
             response = {"error_code": "MEDIA_DURATION_EXCEEDED", "message": "音轨最长支持 2 小时。"}
         except Exception as exc:
             # 只有设备故障才允许主机在新的 CPU 进程中重试一次。
-            import torch
-            cuda_failure = isinstance(exc, CudaInitializationError)
-            cuda_oom = request.get("_actual_device") == "cuda:0" and isinstance(exc, torch.cuda.OutOfMemoryError)
-            if cuda_failure or cuda_oom:
-                response = {"error_code": "LOCAL_CUDA_OOM" if cuda_oom else "LOCAL_CUDA_INIT_FAILED",
-                            "message": "CUDA 运行失败，将释放进程并重试 CPU。"}
-            else:
-                response = {"error_code": "LOCAL_INFERENCE_FAILED", "message": "本地推理失败，请检查媒体格式、模型和设备配置。"}
+            response = inference_failure(exc, request)
     if "error_code" in response:
         response["diagnostics"] = {"requested_device": request["config"]["device"], "actual_device": request.get("_actual_device", "unknown")}
     from protocol import response_lines

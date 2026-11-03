@@ -252,7 +252,16 @@ class Runtime:
             except TimeoutError as exc:
                 raise ProviderError("LOCAL_MODEL_TIMEOUT", "本地模型处理超时。") from exc
             if process.returncode != 0:
-                raise ProviderError("LOCAL_MODEL_PROCESS_FAILED", "本地模型进程退出，请检查依赖与资源预算。")
+                exit_code = process.returncode
+                diagnostics["worker_exit_code"] = str(exit_code)
+                if exit_code == 75:  # worker's RSS budget monitor
+                    raise ProviderError("LOCAL_MODEL_MEMORY_LIMIT_EXCEEDED",
+                        "本地模型超过设置的内存预算，已停止。请释放系统内存，再按需调整本地模型的内存预算。")
+                if os.name == "nt" and exit_code in {0xC0000005, -1073741819}:
+                    raise ProviderError("LOCAL_MODEL_NATIVE_CRASH",
+                        "本地模型运行库发生访问冲突（0xC0000005）。请检查系统资源、运行库和显卡驱动。")
+                raise ProviderError("LOCAL_MODEL_PROCESS_FAILED",
+                    f"本地模型进程异常退出（退出码 {exit_code}），请检查运行库与系统资源。")
             if not isinstance(result, dict):
                 raise ProviderError("LOCAL_MODEL_INVALID_RESPONSE", "本地模型进程未返回有效结果。")
             diagnostics.update(result.get("diagnostics", {}))
