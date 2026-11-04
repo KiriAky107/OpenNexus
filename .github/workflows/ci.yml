@@ -298,7 +298,7 @@ jobs:
       - name: Check the transport without the desktop feature
         run: cargo clippy --lib --no-default-features --features sync-http --locked -- -D warnings
       - name: Test native handwriting AI response and cancellation boundaries
-        run: cargo test --lib --no-default-features --features sync-http --locked native_ai::
+        run: 'cargo test --lib --no-default-features --features sync-http --locked native_ai::'
 
   sync-http-android:
     runs-on: ubuntu-24.04

@@ -367,8 +367,8 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
             crate::canvas_contract::validate(p.content.as_bytes()).map_err(|e| e.code)?;
             match canvas_snapshot(ws, &p.path)? {
                 Some(document)
-                    if Some(&document.file_id) == p.expected_file_id.as_ref()
-                        && document.hash == p.expected => {}
+                    if Some(&document.entry.file_id) == p.expected_file_id.as_ref()
+                        && document.entry.hash == p.expected => {}
                 None if p.expected_file_id.is_none() && p.expected.is_empty() => {}
                 _ => return Err("CANVAS_CONTENT_CONFLICT".into()),
             }
