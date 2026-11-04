@@ -91,6 +91,9 @@ def validate(content: bytes) -> None:
                        for key, lower, upper in (("x", -1_000_000, 1_000_000), ("y", -1_000_000, 1_000_000),
                                                  ("width", 1, 100_000), ("height", 1, 100_000)))):
             raise ApiError(422, "CANVAS_INVALID", "画布节点标识或尺寸无效。")
+        from app.services.handwriting_contract import KEY, valid as valid_ink
+        if KEY in node and (node.get("type") != "text" or not valid_ink(node[KEY])):
+            raise ApiError(422, "CANVAS_HANDWRITING_INVALID", "手写笔迹数据无效或超出上限。")
         ids.add(node_id)
         if (not _optional(node, "color", _color)
                 or not _optional(node, "subpath", lambda value: isinstance(value, str) and value.startswith("#"))

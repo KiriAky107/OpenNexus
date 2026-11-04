@@ -114,6 +114,13 @@ pub fn validate(bytes: &[u8]) -> Result<()> {
         {
             return Err(invalid());
         }
+        if let Some(ink) = node.get(crate::handwriting::KEY) {
+            if node.get("type").and_then(Value::as_str) != Some("text")
+                || !crate::handwriting::valid(ink)
+            {
+                return Err(invalid());
+            }
+        }
         match node.get("type").and_then(Value::as_str) {
             Some("text") if node.get("text").and_then(Value::as_str).is_some() => {}
             Some("file")

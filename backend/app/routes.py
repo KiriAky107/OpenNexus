@@ -1920,3 +1920,11 @@ from app.benchmarks import agent as agent_benchmark
 @router.post('/benchmarks/agent/runs', response_model=BenchmarkRun, status_code=202, tags=['Benchmark'])
 async def create_agent_benchmark(request: AgentBenchmarkRequest):
     return await agent_benchmark.create_run(request)
+
+
+from app.services import handwriting as handwriting_service
+
+
+@router.post("/handwriting/analyze", tags=["Canvas"])
+async def analyze_handwriting(request: handwriting_service.AnalyzeRequest) -> dict:
+    return await handwriting_service.analyze(request, container.providers)

@@ -297,6 +297,8 @@ jobs:
         run: cargo test --lib --no-default-features --features sync-http --locked sync_ -- --nocapture
       - name: Check the transport without the desktop feature
         run: cargo clippy --lib --no-default-features --features sync-http --locked -- -D warnings
+      - name: Test native handwriting AI response and cancellation boundaries
+        run: cargo test --lib --no-default-features --features sync-http --locked native_ai::
 
   sync-http-android:
     runs-on: ubuntu-24.04
@@ -330,3 +332,6 @@ jobs:
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$toolchain/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
       - name: Check the actual Android TrustManager and JNI types
         run: cargo clippy --lib --target aarch64-linux-android --no-default-features --features sync-http --locked -- -D warnings
+      - name: Check the mobile AI command and Keystore adapter
+        working-directory: frontend/mobile/src-tauri
+        run: cargo check --lib --target aarch64-linux-android --locked

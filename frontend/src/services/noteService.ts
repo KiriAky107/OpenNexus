@@ -51,7 +51,7 @@ export interface NoteDiff {
   truncated: boolean
 }
 export interface NoteWritePreview {
-  kind?: 'experiment_file'
+  kind?: 'experiment_file' | 'canvas_handwriting'
   file_id?: string | null
   overwrite?: boolean
   before_bytes?: number
