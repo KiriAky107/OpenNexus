@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CanvasModel } from './canvasModel'
 import { applyHandwritingProposal } from './handwritingActions'
-import { emptyHandwriting, eraseStroke, handwritingOf, handwritingPlainText, INK_KEY, InkInput, layoutHandwrittenText, MAX_INK_POINTS, strokePath, validHandwriting } from './handwriting'
+import { emptyHandwriting, eraseStroke, fitHandwrittenText, handwritingOf, handwritingPlainText, INK_KEY, InkInput, layoutHandwrittenText, MAX_INK_POINTS, strokePath, validHandwriting } from './handwriting'
 import { validateCanvasContent } from '@/services/workspaceDocuments'
 const p=(x=1,y=1,pressure=.5)=>({x,y,pressure})
 const stroke=()=>({id:'stroke',color:'#123456',width:3,points:[p(10,10),p(100,100,1)]})
@@ -30,6 +30,16 @@ describe('portable handwriting',()=>{
   it('uses a closed pressure path and visible one-point dots',()=>{
     expect(strokePath(stroke())).toMatch(/^M .+ Z$/)
     expect(strokePath({...stroke(),points:[p()]})).toContain(' a ')
+  })
+  it('grows a long text page without truncating or changing the caller page',()=>{
+    const original=emptyHandwriting('text'),text='长'.repeat(1200)
+    const fitted=fitHandwrittenText(text,original)!
+    expect(fitted.height).toBeGreaterThan(original.height);expect(fitted.height).toBeLessThanOrEqual(4096)
+    expect(layoutHandwrittenText(text,fitted).glyphs.map(g=>g.char).join('')).toBe(text)
+    expect(original.height).toBe(640);expect(fitted).not.toBe(original)
+    expect(fitHandwrittenText('长'.repeat(10000),original)).toBeUndefined()
+    expect(fitHandwrittenText(text,{...original,height:0})).toBeUndefined()
+    expect(fitHandwrittenText(text,emptyHandwriting())).toBeUndefined()
   })
   it('cleans Markdown presentation without damaging math operators or source',()=>{
     const source='# 标题\n\n**重点**：3 * 4 * 5 = 60\n\n- 负数 -3\n- `x / y`'
@@ -86,5 +96,15 @@ describe('reviewed conversion',()=>{
     ink.strokes=[{...stroke(),points:[p(-5,0)]}]
     expect(()=>applyHandwritingProposal(model,before,undefined,{x:0,y:0},{kind:'save',original:{ink,text:''}})).toThrow()
     expect(model.source).toBe(before)
+  })
+  it('resizes expanded paper while preserving an unchanged manually resized node',()=>{
+    const ink=emptyHandwriting('text')
+    const model=new CanvasModel(JSON.stringify({nodes:[{id:'ink',type:'text',x:0,y:0,width:480,height:500,text:'short',[INK_KEY]:ink}],edges:[]}))
+    applyHandwritingProposal(model,model.source,'ink',{x:0,y:0},{kind:'save',original:{ink,text:'edited'}})
+    expect(model.document.nodes[0]!.height).toBe(500)
+    const expanded=fitHandwrittenText('长'.repeat(1200),ink)!
+    applyHandwritingProposal(model,model.source,'ink',{x:0,y:0},{kind:'save',original:{ink:expanded,text:'长'.repeat(1200)}})
+    expect(model.document.nodes[0]!.height).toBe(480*expanded.height/expanded.width+40)
+    model.undo();expect(model.document.nodes[0]!.height).toBe(500)
   })
 })

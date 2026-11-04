@@ -29,6 +29,18 @@ it('disables saving into a read-only document',async()=>{
   expect(button(wrapper,'Save handwriting node').attributes('disabled')).toBeDefined()
   expect(wrapper.emitted('apply')).toBeUndefined();wrapper.unmount()
 })
+it('fits a long imported note and rejects oversized conversion without emitting a partial result',async()=>{
+  const text='长'.repeat(1200)
+  const wrapper=mount(HandwritingPanel,{props:{ink:emptyHandwriting('text'),text,language:'en'}})
+  await button(wrapper,'Save handwriting node').trigger('click')
+  const saved=wrapper.emitted('apply')![0]![0] as any
+  expect(saved.original.text).toBe(text);expect(saved.original.ink.height).toBeGreaterThan(640)
+  await wrapper.find('textarea').setValue('长'.repeat(10000))
+  await button(wrapper,'Text to handwriting').trigger('click')
+  expect(wrapper.emitted('apply')).toHaveLength(1)
+  expect(wrapper.text()).toContain('source was not truncated')
+  wrapper.unmount()
+})
 it('maps actual pointer coordinates into the page and does not save cancelled ink',async()=>{
   const wrapper=mount(HandwritingPanel,{props:{language:'en'}})
   const surface=wrapper.get('.ink-surface').element as HTMLElement

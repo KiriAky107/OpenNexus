@@ -2,6 +2,8 @@ import { fromMarkdown } from 'mdast-util-from-markdown'
 /** Portable ink in a JSON Canvas text node. Plain text remains the fallback. */
 export const INK_KEY = 'opennexusHandwriting'
 export const MAX_INK_POINTS = 20000
+/** Document paper/ink colors stay identical across themes and model image exports. */
+export const HANDWRITING_COLORS = { ink: '#263746', paper: '#fffdf6', grid: '#dce4ed' } as const
 export interface InkPoint { x: number; y: number; pressure: number }
 export interface InkStroke { id: string; color: string; width: number; points: InkPoint[] }
 export interface Handwriting {
@@ -84,6 +86,17 @@ export function layoutHandwrittenText(text: string, ink: Handwriting): { glyphs:
     x += advance
   }
   return { glyphs, overflow: false }
+}
+
+/** Grow only the new text page, within the portable format limit; never drop source text. */
+export function fitHandwrittenText(text: string, ink: Handwriting): Handwriting | undefined {
+  if (!validHandwriting(ink) || ink.mode !== 'text') return undefined
+  const next = cloneInk(ink)
+  while (layoutHandwrittenText(text, next).overflow) {
+    if (next.height >= 4096) return undefined
+    next.height = Math.min(4096, next.height * 2)
+  }
+  return next
 }
 
 /** One pointer owns a stroke. Multi-touch, palm contact, cancel and lost capture never commit it. */

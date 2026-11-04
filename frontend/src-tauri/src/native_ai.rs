@@ -245,15 +245,21 @@ fn payload(profile: &Profile, input: &Analysis) -> Result<(&'static str, Value)>
     })
 }
 
+fn has_tool_call(message: &Value) -> bool {
+    message.get("tool_calls").is_some_and(|value| {
+        !value.is_null() && value.as_array().is_none_or(|items| !items.is_empty())
+    }) || message
+        .get("function_call")
+        .is_some_and(|value| !value.is_null())
+}
+
 pub fn result_text(profile: &Profile, value: &Value) -> Result<String> {
     let text = match profile.protocol.as_str() {
         "openai_chat" => {
             let choices = value["choices"].as_array().ok_or("AI_RESPONSE_INVALID")?;
             if choices.len() != 1
                 || choices[0]["finish_reason"] != "stop"
-                || choices[0]["message"]
-                    .get("tool_calls")
-                    .is_some_and(|v| v.as_array().is_none_or(|a| !a.is_empty()))
+                || has_tool_call(&choices[0]["message"])
             {
                 return Err("AI_RESPONSE_INCOMPLETE");
             }
@@ -299,7 +305,7 @@ pub fn result_text(profile: &Profile, value: &Value) -> Result<String> {
         "ollama" => {
             if value["done"] != true
                 || value.get("done_reason").is_some_and(|v| v != "stop")
-                || value["message"].get("tool_calls").is_some()
+                || has_tool_call(&value["message"])
             {
                 return Err("AI_RESPONSE_INCOMPLETE");
             }
@@ -439,6 +445,27 @@ mod tests {
             .is_err());
         }
         assert!(result_text(&p,&json!({"choices":[{"finish_reason":"stop","message":{"content":"x","tool_calls":[{}]}}]})).is_err());
+    }
+    #[test]
+    fn nullable_tool_metadata_is_empty_but_real_or_malformed_calls_are_rejected() {
+        let mut p = profile();
+        for protocol in ["openai_chat", "ollama"] {
+            p.protocol = protocol.into();
+            for calls in [Value::Null, json!([]), json!([{}]), json!({}), json!(false)] {
+                let message = json!({"content":"note","tool_calls":calls,"function_call":null});
+                let response = if protocol == "openai_chat" {
+                    json!({"choices":[{"finish_reason":"stop","message":message}]})
+                } else {
+                    json!({"done":true,"message":message})
+                };
+                assert_eq!(
+                    result_text(&p, &response).is_ok(),
+                    calls.is_null() || calls == json!([])
+                );
+            }
+        }
+        p.protocol = "openai_chat".into();
+        assert!(result_text(&p, &json!({"choices":[{"finish_reason":"stop","message":{"content":"x","function_call":{"name":"write"}}}]})).is_err());
     }
     #[test]
     fn all_supported_protocols_require_complete_text_without_tools() {

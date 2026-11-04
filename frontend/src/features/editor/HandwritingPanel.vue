@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import HandwritingView from './HandwritingView.vue'
-import { cloneInk, emptyHandwriting, eraseStroke, InkInput, layoutHandwrittenText, MAX_INK_POINTS, strokePath, type Handwriting, type InkPoint } from './handwriting'
+import { cloneInk, emptyHandwriting, eraseStroke, fitHandwrittenText, HANDWRITING_COLORS, InkInput, layoutHandwrittenText, MAX_INK_POINTS, strokePath, type Handwriting, type InkPoint } from './handwriting'
 export type HandwritingAction = 'recognize' | 'summarize' | 'organize' | 'generate'
 export interface HandwritingAnalysis { action: HandwritingAction; text: string; image: string; instruction: string }
 import type { HandwritingProposal } from './handwritingActions'
 const props=defineProps<{ ink?: Handwriting; text?: string; language?: string; readOnly?: boolean; analyze?: (request: HandwritingAnalysis, signal: AbortSignal) => Promise<string> }>()
 const emit=defineEmits<{close:[];apply:[proposal:HandwritingProposal]}>()
 const t=(zh:string,en:string)=>props.language==='en'?en:zh
-const ink=ref(cloneInk(props.ink??emptyHandwriting())), text=ref(props.text??''), color=ref('#263746'), width=ref(3), penOnly=ref(false), eraser=ref(false)
+const initialInk=cloneInk(props.ink??emptyHandwriting())
+const ink=ref(fitHandwrittenText(props.text??'',initialInk)??initialInk), text=ref(props.text??''), color=ref<string>(HANDWRITING_COLORS.ink), width=ref(3), penOnly=ref(false), eraser=ref(false)
 const input=new InkInput(), revision=ref(0), surface=ref<HTMLElement>(), drawing=ref(false), dirty=ref(false), discard=ref(false)
 const past: string[]=[], future: string[]=[]
 const error=ref(''), result=ref(''), instruction=ref(''), action=ref<HandwritingAction>('recognize'), busy=ref(false)
@@ -58,7 +59,7 @@ async function image():Promise<string>{
   if(ink.value.mode==='text')return ''
   const canvas=document.createElement('canvas');canvas.width=ink.value.width;canvas.height=ink.value.height
   const context=canvas.getContext('2d');if(!context)throw Error(t('无法生成手写图像。','Unable to render handwriting.'))
-  context.fillStyle='#fffdf6';context.fillRect(0,0,canvas.width,canvas.height)
+  context.fillStyle=HANDWRITING_COLORS.paper;context.fillRect(0,0,canvas.width,canvas.height)
   for(const stroke of ink.value.strokes){context.fillStyle=stroke.color;context.fill(new Path2D(strokePath(stroke)))}
   return canvas.toDataURL('image/png')
 }
@@ -76,9 +77,9 @@ async function run(){
 }
 function writeText(value:string){
   const next=emptyHandwriting('text');next.width=ink.value.width;next.height=ink.value.height
-  const layout=layoutHandwrittenText(value,next)
-  if(layout.overflow){error.value=t('文字超出一页，请缩短内容或分成多个节点。','The text exceeds a page. Split it into several nodes.');return}
-  apply('handwrite',value,next)
+  const fitted=fitHandwrittenText(value,next)
+  if(!fitted){error.value=t('文字超出最大纸面，请分成多个节点；原文未截断。','The text exceeds the maximum page. Split it into several nodes; the source was not truncated.');return}
+  apply('handwrite',value,fitted)
 }
 onMounted(()=>{previousFocus=document.activeElement as HTMLElement;dialog.value?.querySelector<HTMLButtonElement>('header button')?.focus();document.addEventListener('visibilitychange',visibility);if(typeof ResizeObserver!=='undefined'&&surface.value){resizeObserver=new ResizeObserver(()=>cancelPointer());resizeObserver.observe(surface.value)}})
 onBeforeUnmount(()=>{disposed=true;cancelPointer();cancelAi();resizeObserver?.disconnect();document.removeEventListener('visibilitychange',visibility);if(dialog.value?.contains(document.activeElement)&&previousFocus?.isConnected)previousFocus.focus()})
@@ -109,5 +110,5 @@ defineExpose({close,cancel:cancelPointer})
 </div>
 </template>
 <style scoped>
-.ink-dialog{position:fixed;inset:0;z-index:1000;background:#0006;display:grid;place-items:center;padding:12px;color:var(--color-text-primary)}.ink-panel{width:min(1300px,100%);max-height:95dvh;display:flex;flex-direction:column;background:var(--color-surface-primary);border-radius:12px;overflow:hidden}.ink-panel header,.ink-panel footer,.ink-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:12px;border-bottom:1px solid var(--color-border-default)}h2,h3{margin:0;font-size:17px}.ink-panel header{justify-content:space-between}.ink-panel footer{justify-content:flex-end}.ink-columns{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(260px,1fr);overflow:auto;gap:16px;padding:14px;min-height:0}.ink-paper-wrap{min-width:0}.ink-surface{width:100%;touch-action:none;user-select:none;overflow:hidden;border:1px solid #c9bfa6;cursor:crosshair}.ink-content{display:grid;align-content:start;gap:12px}.ink-content label{display:grid;gap:6px}.ink-panel textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:64px}.ink-panel textarea,.ink-panel select{background:var(--color-background-primary);color:inherit;border:1px solid var(--color-border-default);border-radius:6px;padding:8px}.ink-panel button{min-height:40px;padding:6px 12px;border:1px solid var(--color-border-default);border-radius:6px;background:var(--color-background-primary);color:inherit}.ink-panel button[aria-pressed=true]{outline:2px solid var(--color-border-focus)}.ink-panel button:disabled{opacity:.45}.ink-toolbar label{display:flex;align-items:center;gap:5px}.ink-toolbar input[type=range]{width:80px}.ink-actions{display:flex;flex-wrap:wrap;gap:6px}.ink-ai{display:grid;gap:8px;padding-top:12px;border-top:1px solid var(--color-border-default)}p{font-size:12px;color:var(--color-text-secondary);margin:4px 0}p[role=alert]{color:var(--color-error)}@media(max-width:720px){.ink-columns{grid-template-columns:1fr}.ink-dialog{padding:0}.ink-panel{max-height:100dvh;height:100dvh;border-radius:0}.ink-toolbar button{min-width:44px;min-height:44px}}
+.ink-dialog{position:fixed;inset:0;z-index:1000;background:var(--color-background-overlay);display:grid;place-items:center;padding:12px;color:var(--color-text-primary)}.ink-panel{width:min(1300px,100%);max-height:95dvh;display:flex;flex-direction:column;background:var(--color-surface-primary);border-radius:12px;overflow:hidden}.ink-panel header,.ink-panel footer,.ink-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:12px;border-bottom:1px solid var(--color-border-default)}h2,h3{margin:0;font-size:17px}.ink-panel header{justify-content:space-between}.ink-panel footer{justify-content:flex-end}.ink-columns{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(260px,1fr);overflow:auto;gap:16px;padding:14px;min-height:0}.ink-paper-wrap{min-width:0}.ink-surface{width:100%;touch-action:none;user-select:none;overflow:hidden;border:1px solid var(--color-border-default);cursor:crosshair}.ink-content{display:grid;align-content:start;gap:12px}.ink-content label{display:grid;gap:6px}.ink-panel textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:64px}.ink-panel textarea,.ink-panel select{background:var(--color-background-primary);color:inherit;border:1px solid var(--color-border-default);border-radius:6px;padding:8px}.ink-panel button{min-height:40px;padding:6px 12px;border:1px solid var(--color-border-default);border-radius:6px;background:var(--color-background-primary);color:inherit}.ink-panel button[aria-pressed=true]{outline:2px solid var(--color-border-focus)}.ink-panel button:disabled{opacity:.45}.ink-toolbar label{display:flex;align-items:center;gap:5px}.ink-toolbar input[type=range]{width:80px}.ink-actions{display:flex;flex-wrap:wrap;gap:6px}.ink-ai{display:grid;gap:8px;padding-top:12px;border-top:1px solid var(--color-border-default)}p{font-size:12px;color:var(--color-text-secondary);margin:4px 0}p[role=alert]{color:var(--color-error)}@media(max-width:720px){.ink-columns{grid-template-columns:1fr}.ink-dialog{padding:0}.ink-panel{max-height:100dvh;height:100dvh;border-radius:0}.ink-toolbar button{min-width:44px;min-height:44px}}
 </style>
