@@ -81,16 +81,16 @@ pub async fn dispatch(raw: String) -> Result<String, String> {
                 let old = load()?;
                 let secret = match secret {
                     Some(value) => Zeroizing::new(value),
-                    None if profile.protocol == "ollama" => Zeroizing::new(String::new()),
-                    None => {
-                        let old = old.as_ref().ok_or("AI_CREDENTIAL_REQUIRED")?;
-                        if old.profile.endpoint != profile.endpoint
-                            || old.profile.protocol != profile.protocol
+                    None => match old.as_ref() {
+                        Some(old)
+                            if old.profile.endpoint == profile.endpoint
+                                && old.profile.protocol == profile.protocol =>
                         {
-                            return Err("AI_CREDENTIAL_REQUIRED");
+                            Zeroizing::new(old.secret.clone())
                         }
-                        Zeroizing::new(old.secret.clone())
-                    }
+                        _ if profile.protocol == "ollama" => Zeroizing::new(String::new()),
+                        _ => return Err("AI_CREDENTIAL_REQUIRED"),
+                    },
                 };
                 if secret.len() > 8192 || secret.chars().any(char::is_control) {
                     return Err("AI_CREDENTIAL_INVALID");
