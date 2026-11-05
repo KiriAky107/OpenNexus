@@ -30,6 +30,16 @@ class OriginalQuotaAdmission(ABC):
         """
 
 
+class OriginalQuotaAssociationAdmission(ABC):
+    @abstractmethod
+    def verify(self, *, association_scope, identity, collection_id):
+        """Verify own associated driver/once-stop/two samples, return typed digest.
+
+        No future quota cycle ID is available here. There is no concrete
+        verifier or runtime admission supplied by this interface.
+        """
+
+
 def need(value):
     if not value:
         raise RuntimeError('SIGNED_QUOTA_COLLECTION_UNAVAILABLE')
@@ -54,13 +64,35 @@ def collect_stopped(device, serial, tools, artifact, *, scope, stage, identity, 
     """
     scope = quota._scope(scope)
     need(type(stage) is str and stage in ('associated', 'quota-failed'))
+    identity = owned_identity(identity, scope)
+    need(isinstance(admission, OriginalQuotaAdmission))
+    need(admission.verify(scope=dict(scope), stage=stage, identity=dict(identity)) is None)
+    return _copy_stopped(device, serial, tools, artifact, scope=scope, stage=stage, identity=identity)
+
+
+def owned_identity(identity, scope):
     need(quota._closed(identity, ('avd', 'qemu', 'api', 'build_type', 'debuggable', 'boot_id'))
          and type(identity['build_type']) is str and identity['build_type'] in ('eng', 'userdebug')
          and quota._same(identity, dict(avd=scope['avd'], qemu='1', api='36',
                          build_type=identity['build_type'], debuggable='1', boot_id=scope['boot_id'])))
-    identity = dict(identity)
-    need(isinstance(admission, OriginalQuotaAdmission))
-    need(admission.verify(scope=dict(scope), stage=stage, identity=dict(identity)) is None)
+    return dict(identity)
+
+
+def collect_associated_before_cycle(device, serial, tools, artifact, *, association_scope,
+                                   identity, collection_id, admission):
+    """New operation-only capture; no placeholder parent/input/window or action."""
+    scope = quota.association_scope(association_scope)
+    need(quota._uuid(collection_id) and collection_id not in scope.values())
+    identity = owned_identity(identity, scope)
+    need(isinstance(admission, OriginalQuotaAssociationAdmission))
+    digest = admission.verify(association_scope=dict(scope), identity=dict(identity), collection_id=collection_id)
+    quota.association_capture(scope, collection_id, digest)
+    return _copy_stopped(device, serial, tools, artifact, scope=scope, stage=quota.ASSOCIATED_BEFORE_CYCLE,
+                         identity=identity, collection_id=collection_id, admission_digest=digest)
+
+
+def _copy_stopped(device, serial, tools, artifact, *, scope, stage, identity,
+                  collection_id=None, admission_digest=None):
     tools, artifact = directory(tools), directory(artifact)
     need(not tools.is_relative_to(artifact) and not artifact.is_relative_to(tools))
 
@@ -184,6 +216,10 @@ def collect_stopped(device, serial, tools, artifact, *, scope, stage, identity, 
         quota_stage=stage, spool_source=snapshot.SPOOL_SOURCE, files=files,
         app_stopped_before_and_after=True, credential_store_copied=False,
         SQL_executed_on_device=False, normal_phone_permissions_verified=False)
+    if stage == quota.ASSOCIATED_BEFORE_CYCLE:
+        del manifest['quota_scope']
+        manifest.update(schema=2, quota_association_scope=scope, collection_id=collection_id,
+                        admission_metadata_canonical_sha256=admission_digest)
     need(set(files) == snapshot.FILES)
     raw_manifest = json.dumps(manifest, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
     need(len(raw_manifest) <= snapshot.MAX_MANIFEST)

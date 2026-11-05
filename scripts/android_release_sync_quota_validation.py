@@ -13,6 +13,7 @@ NOTE = 'release-owned-note.md'
 BODY = '# 原始 Markdown 😀\n\n离线正文 / original content\n'.encode('utf-8')
 HASH = '7662c0191d53f61020a020ca8b86238914ba39bdb017a48f9eb3dd709f5594d9'
 QUOTA = 32
+ASSOCIATED_BEFORE_CYCLE = 'associated-before-cycle'
 MAX_JSON = 32768
 MAX_INT = 2**63 - 1
 
@@ -68,11 +69,48 @@ def _scope(value):
     return dict(value)
 
 
+def association_scope(value):
+    """Operation identities available before the quota driver creates cycle IDs."""
+    operations = ('login_operation_id', 'setup_operation_id', 'save_operation_id',
+                  'association_operation_id', 'upload_operation_id')
+    keys = ('schema','owner_run','avd','boot_id','api','uid','product','sync',
+            'remote_vault','binding_id','android_device','setup_device',*operations)
+    _need(_closed(value, keys))
+    _need(_pattern(value['owner_run'], r'[1-9][0-9]{0,17}-[1-9][0-9]{0,5}')
+          and _same(value['schema'], 1) and _same(value['api'], 36)
+          and _same(value['avd'], 'opennexus-ci-'+value['owner_run'])
+          and _same(value['product'], PRODUCT) and _same(value['sync'], SYNC)
+          and type(value['uid']) is int and 10000 <= value['uid'] <= 99999)
+    _need(all(_uuid(value[k]) for k in ('boot_id','binding_id',*operations))
+          and len({value[k] for k in operations}) == len(operations)
+          and all(_pattern(value[k], r'[0-9a-f]{32}') for k in ('remote_vault','android_device','setup_device'))
+          and value['android_device'] != value['setup_device'])
+    return dict(value)
+
+
+def association_capture(value, collection_id, admission_digest):
+    scope = association_scope(value)
+    _need(_uuid(collection_id) and collection_id not in scope.values()
+          and _pattern(admission_digest, r'[0-9a-f]{64}'))
+    return scope
+
+
 def _before(value, scope):
-    keys = {'schema', 'scope', 'stage', 'draft', 'save', 'file', 'binding', 'association',
+    return _associated_rows(value, scope, schema=1, scope_key='scope', stage='associated')
+
+
+def before_associated_capture(value, scope):
+    scope = association_scope(scope)
+    expected = _associated_rows(value, scope, schema=2, scope_key='association_scope', stage=ASSOCIATED_BEFORE_CYCLE)
+    # Detach every list/dict only after all retained data are closed and typed.
+    return json.loads(json.dumps(expected, separators=(',', ':'), ensure_ascii=True))
+
+
+def _associated_rows(value, scope, *, schema, scope_key, stage):
+    keys = {'schema', scope_key, 'stage', 'draft', 'save', 'file', 'binding', 'association',
             'outbox', 'jobs', 'attempts', 'issuers', 'commits', 'heads', 'inbox', 'conflicts'}
-    _need(_closed(value, keys) and _same(value['schema'], 1) and _same(value['scope'], scope)
-          and _same(value['stage'], 'associated'))
+    _need(_closed(value, keys) and _same(value['schema'], schema) and _same(value[scope_key], scope)
+          and _same(value['stage'], stage))
     draft, file, association = value['draft'], value['file'], value['association']
     _need(_closed(draft, ('id', 'file_id', 'path', 'base_hash', 'generation', 'saved_generation', 'content'))
           and _uuid(draft['id']) and _uuid(draft['file_id']) and _number(draft['generation'], 1))
@@ -90,11 +128,12 @@ def _before(value, scope):
                                 auth_operation_id=scope['login_operation_id'], remote_vault=scope['remote_vault'], state='bound')
     outbox = dict(operation_id=scope['upload_operation_id'], file_id=draft['file_id'], revision=file['revision'],
                   path=NOTE, hash=HASH, operation='put', state='pending')
-    expected = dict(schema=1, scope=scope, stage='associated', draft=expected_draft, save=save, file=expected_file,
+    expected = dict(schema=schema, stage=stage, draft=expected_draft, save=save, file=expected_file,
                     binding=dict(id=scope['binding_id'], remote_vault=scope['remote_vault'], state='active', cursor=0),
                     association=expected_association,
                     outbox=[dict(outbox, operation_id=scope['save_operation_id'], state='archived'), outbox],
                     jobs=[], attempts=[], issuers=[], commits=[], heads=[], inbox=[], conflicts=[])
+    expected[scope_key] = scope
     _need(_same(value, expected))
     return expected
 

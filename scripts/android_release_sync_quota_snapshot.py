@@ -114,6 +114,15 @@ def layout(snapshot):
 
 def admit(snapshot, working, scope, stage):
     need(type(stage) is str and stage in ('associated', 'quota-failed'))
+    return _admit(snapshot, working, scope, stage, before_cycle=False)
+
+
+def admit_associated_before_cycle(snapshot, working, scope):
+    scope = validation.association_scope(scope)
+    return _admit(snapshot, working, scope, validation.ASSOCIATED_BEFORE_CYCLE, before_cycle=True)
+
+
+def _admit(snapshot, working, scope, stage, *, before_cycle):
     safe_path(snapshot); safe_path(working.parent)
     need(snapshot.is_dir() and not working.exists() and not working.is_symlink()
          and working.absolute() == working.resolve() and not working.is_relative_to(snapshot)
@@ -124,11 +133,17 @@ def admit(snapshot, working, scope, stage):
     raw = bounded_bytes(path, MAX_MANIFEST); value = strict_json(raw)
     keys = ('schema', 'package', 'identity', 'quota_scope', 'quota_stage', 'spool_source', 'files',
             'app_stopped_before_and_after', 'credential_store_copied', 'SQL_executed_on_device', 'normal_phone_permissions_verified')
-    need(validation._closed(value, keys) and validation._same(value['schema'], 1)
-         and validation._same(value['package'], APP) and validation._same(value['quota_scope'], scope)
+    if before_cycle:
+        keys = tuple(k for k in keys if k != 'quota_scope') + (
+            'quota_association_scope','collection_id','admission_metadata_canonical_sha256')
+    scope_key = 'quota_association_scope' if before_cycle else 'quota_scope'
+    need(validation._closed(value, keys) and validation._same(value['schema'], 2 if before_cycle else 1)
+         and validation._same(value['package'], APP) and validation._same(value[scope_key], scope)
          and validation._same(value['quota_stage'], stage) and validation._same(value['spool_source'], SPOOL_SOURCE)
          and value['app_stopped_before_and_after'] is True and value['credential_store_copied'] is False
          and value['SQL_executed_on_device'] is False and value['normal_phone_permissions_verified'] is False)
+    if before_cycle:
+        validation.association_capture(value[scope_key], value['collection_id'], value['admission_metadata_canonical_sha256'])
     identity = value['identity']
     need(validation._closed(identity, ('avd', 'qemu', 'api', 'build_type', 'debuggable', 'boot_id'))
          and type(identity['build_type']) is str and identity['build_type'] in ('eng', 'userdebug')
@@ -240,11 +255,24 @@ class QuotaProjection:
 
 def project_quota(snapshot, working, *, scope, selected, stage):
     """Read approved copies only; caller removes its working directory in finally."""
+    return _project(snapshot, working, scope=scope, selected=selected, stage=stage, before_cycle=False)
+
+
+def project_associated_before_cycle(snapshot, working, *, association_scope, selected):
+    """Project operation-only originals; do not invent a future cycle scope."""
+    return _project(snapshot, working, scope=association_scope, selected=selected,
+                    stage=validation.ASSOCIATED_BEFORE_CYCLE, before_cycle=True)
+
+
+def _project(snapshot, working, *, scope, selected, stage, before_cycle):
     try:
-        scope = validation._scope(scope); selected = selection_scope(selected)
+        need(type(stage) is str and stage in ((validation.ASSOCIATED_BEFORE_CYCLE,) if before_cycle else ('associated','quota-failed')))
+        scope = validation.association_scope(scope) if before_cycle else validation._scope(scope)
+        selected = selection_scope(selected)
         need(type(snapshot) in (str, type(Path())) and type(working) in (str, type(Path())))
         snapshot, working = Path(snapshot).absolute(), Path(working).absolute()
-        manifest_raw, manifest = admit(snapshot, working, scope, stage)
+        manifest_raw, manifest = (admit_associated_before_cycle(snapshot, working, scope) if before_cycle else
+                                  admit(snapshot, working, scope, stage))
         copy_originals(snapshot, working, manifest)
         with closing(open_copy(working / DATABASES[0], DRAFT_COLUMNS)) as db:
             # Reject hidden/foreign documents before reading any body.
@@ -261,6 +289,9 @@ def project_quota(snapshot, working, *, scope, selected, stage):
                          file=rows(db, 'files', HOST_COLUMNS['files'], 1)[0],
                          binding={k: binding[k] for k in ('id', 'remote_vault', 'state', 'cursor')},
                          association=association(db, scope, selected), outbox=rows(db, 'outbox', HOST_COLUMNS['outbox'], 2))
+            if before_cycle:
+                del value['scope']
+                value.update(schema=2, association_scope=scope)
             attempted = int(stage == 'quota-failed')
             for name, table in (('jobs', 'sync_jobs'), ('attempts', 'sync_attempts'), ('issuers', 'mobile_sync_attempt_devices'),
                                 ('heads', 'sync_heads'), ('inbox', 'sync_inbox'), ('conflicts', 'sync_conflicts')):
@@ -269,7 +300,9 @@ def project_quota(snapshot, working, *, scope, selected, stage):
                 if count:
                     need(db.execute('SELECT binding FROM ' + table).fetchall() == [(scope['binding_id'],)])
             value['commits'] = rows(db, 'sync_jobs', 'binding,operation_id,file_id,operation,base_revision,upload_id', attempted)
-        if stage == 'associated':
+        if before_cycle:
+            value = validation.before_associated_capture(value, scope)
+        elif stage == 'associated':
             validation._before(value, scope)
         else:
             candidate = dict(value, stage='associated', outbox=[value['outbox'][0], dict(value['outbox'][1], state='pending')],
@@ -289,6 +322,10 @@ def project_quota(snapshot, working, *, scope, selected, stage):
             original_files=manifest['files'], query_only_new_working_copies=True,
             raw_DB_WAL_SHM_never_opened_by_SQLite=True, credentials_selected=False,
             completed_driver_and_stop_gate_verified=False, runtime_verified=False)
+        if before_cycle:
+            evidence.update(collection_id=manifest['collection_id'],
+                admission_metadata_canonical_sha256=manifest['admission_metadata_canonical_sha256'],
+                original_cycle_ids_present_at_capture=False, later_cycle_binding_verified=False)
         return QuotaProjection(value, evidence, note, spool)
     except (OSError, sqlite3.Error, ValueError, KeyError, IndexError, UnicodeError, RecursionError):
         raise RuntimeError('RELEASE_QUOTA_PROJECTION_UNAVAILABLE') from None
