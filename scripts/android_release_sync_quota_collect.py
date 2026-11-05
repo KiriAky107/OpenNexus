@@ -40,6 +40,16 @@ class OriginalQuotaAssociationAdmission(ABC):
         """
 
 
+class OriginalQuotaBootstrapAdmission(ABC):
+    @abstractmethod
+    def verify(self, *, capture_scope, identity, collection_id):
+        """Verify original associated completion/once-stop/two samples, or raise.
+
+        Binding/upload IDs are not available before capture. No concrete
+        verifier, default success or live admission is supplied here.
+        """
+
+
 def need(value):
     if not value:
         raise RuntimeError('SIGNED_QUOTA_COLLECTION_UNAVAILABLE')
@@ -88,6 +98,19 @@ def collect_associated_before_cycle(device, serial, tools, artifact, *, associat
     digest = admission.verify(association_scope=dict(scope), identity=dict(identity), collection_id=collection_id)
     quota.association_capture(scope, collection_id, digest)
     return _copy_stopped(device, serial, tools, artifact, scope=scope, stage=quota.ASSOCIATED_BEFORE_CYCLE,
+                         identity=identity, collection_id=collection_id, admission_digest=digest)
+
+
+def collect_associated_bootstrap(device, serial, tools, artifact, *, capture_scope,
+                                 identity, collection_id, admission):
+    """Capture known original identities only, before deriving DB-owned IDs."""
+    scope = quota.bootstrap_scope(capture_scope)
+    need(quota._uuid(collection_id) and collection_id not in scope.values())
+    identity = owned_identity(identity, scope)
+    need(isinstance(admission, OriginalQuotaBootstrapAdmission))
+    digest = admission.verify(capture_scope=dict(scope), identity=dict(identity), collection_id=collection_id)
+    quota.bootstrap_capture(scope, collection_id, digest)
+    return _copy_stopped(device, serial, tools, artifact, scope=scope, stage=quota.ASSOCIATED_BOOTSTRAP,
                          identity=identity, collection_id=collection_id, admission_digest=digest)
 
 
@@ -220,6 +243,11 @@ def _copy_stopped(device, serial, tools, artifact, *, scope, stage, identity,
         del manifest['quota_scope']
         manifest.update(schema=2, quota_association_scope=scope, collection_id=collection_id,
                         admission_metadata_canonical_sha256=admission_digest)
+    elif stage == quota.ASSOCIATED_BOOTSTRAP:
+        del manifest['quota_scope']
+        manifest.update(schema=3, quota_association_capture_scope=scope, collection_id=collection_id,
+                        admission_metadata_canonical_sha256=admission_digest,
+                        binding_and_upload_ids_present_at_capture=False)
     need(set(files) == snapshot.FILES)
     raw_manifest = json.dumps(manifest, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
     need(len(raw_manifest) <= snapshot.MAX_MANIFEST)

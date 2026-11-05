@@ -122,7 +122,12 @@ def admit_associated_before_cycle(snapshot, working, scope):
     return _admit(snapshot, working, scope, validation.ASSOCIATED_BEFORE_CYCLE, before_cycle=True)
 
 
-def _admit(snapshot, working, scope, stage, *, before_cycle):
+def admit_associated_bootstrap(snapshot, working, scope):
+    scope = validation.bootstrap_scope(scope)
+    return _admit(snapshot, working, scope, validation.ASSOCIATED_BOOTSTRAP, before_cycle=False, bootstrap=True)
+
+
+def _admit(snapshot, working, scope, stage, *, before_cycle, bootstrap=False):
     safe_path(snapshot); safe_path(working.parent)
     need(snapshot.is_dir() and not working.exists() and not working.is_symlink()
          and working.absolute() == working.resolve() and not working.is_relative_to(snapshot)
@@ -136,14 +141,21 @@ def _admit(snapshot, working, scope, stage, *, before_cycle):
     if before_cycle:
         keys = tuple(k for k in keys if k != 'quota_scope') + (
             'quota_association_scope','collection_id','admission_metadata_canonical_sha256')
-    scope_key = 'quota_association_scope' if before_cycle else 'quota_scope'
-    need(validation._closed(value, keys) and validation._same(value['schema'], 2 if before_cycle else 1)
+    elif bootstrap:
+        keys = tuple(k for k in keys if k != 'quota_scope') + (
+            'quota_association_capture_scope','collection_id','admission_metadata_canonical_sha256',
+            'binding_and_upload_ids_present_at_capture')
+    scope_key = 'quota_association_capture_scope' if bootstrap else 'quota_association_scope' if before_cycle else 'quota_scope'
+    need(validation._closed(value, keys) and validation._same(value['schema'], 3 if bootstrap else 2 if before_cycle else 1)
          and validation._same(value['package'], APP) and validation._same(value[scope_key], scope)
          and validation._same(value['quota_stage'], stage) and validation._same(value['spool_source'], SPOOL_SOURCE)
          and value['app_stopped_before_and_after'] is True and value['credential_store_copied'] is False
          and value['SQL_executed_on_device'] is False and value['normal_phone_permissions_verified'] is False)
     if before_cycle:
         validation.association_capture(value[scope_key], value['collection_id'], value['admission_metadata_canonical_sha256'])
+    elif bootstrap:
+        validation.bootstrap_capture(value[scope_key], value['collection_id'], value['admission_metadata_canonical_sha256'])
+        need(value['binding_and_upload_ids_present_at_capture'] is False)
     identity = value['identity']
     need(validation._closed(identity, ('avd', 'qemu', 'api', 'build_type', 'debuggable', 'boot_id'))
          and type(identity['build_type']) is str and identity['build_type'] in ('eng', 'userdebug')
@@ -264,14 +276,24 @@ def project_associated_before_cycle(snapshot, working, *, association_scope, sel
                     stage=validation.ASSOCIATED_BEFORE_CYCLE, before_cycle=True)
 
 
-def _project(snapshot, working, *, scope, selected, stage, before_cycle):
+def project_associated_bootstrap(snapshot, working, *, capture_scope, selected):
+    """Derive DB-owned IDs only after explicit raw3 capture, on new SQL copies."""
+    return _project(snapshot, working, scope=capture_scope, selected=selected,
+                    stage=validation.ASSOCIATED_BOOTSTRAP, before_cycle=False, bootstrap=True)
+
+
+def _project(snapshot, working, *, scope, selected, stage, before_cycle, bootstrap=False):
     try:
-        need(type(stage) is str and stage in ((validation.ASSOCIATED_BEFORE_CYCLE,) if before_cycle else ('associated','quota-failed')))
-        scope = validation.association_scope(scope) if before_cycle else validation._scope(scope)
+        need(type(stage) is str and stage in ((validation.ASSOCIATED_BOOTSTRAP,) if bootstrap else
+             (validation.ASSOCIATED_BEFORE_CYCLE,) if before_cycle else ('associated','quota-failed')))
+        scope = validation.bootstrap_scope(scope) if bootstrap else validation.association_scope(scope) if before_cycle else validation._scope(scope)
         selected = selection_scope(selected)
+        if bootstrap:
+            need(validation._same(selected['preview_fingerprint'], scope['preview_fingerprint']))
         need(type(snapshot) in (str, type(Path())) and type(working) in (str, type(Path())))
         snapshot, working = Path(snapshot).absolute(), Path(working).absolute()
-        manifest_raw, manifest = (admit_associated_before_cycle(snapshot, working, scope) if before_cycle else
+        manifest_raw, manifest = (admit_associated_bootstrap(snapshot, working, scope) if bootstrap else
+                                  admit_associated_before_cycle(snapshot, working, scope) if before_cycle else
                                   admit(snapshot, working, scope, stage))
         copy_originals(snapshot, working, manifest)
         with closing(open_copy(working / DATABASES[0], DRAFT_COLUMNS)) as db:
@@ -283,15 +305,25 @@ def _project(snapshot, working, *, scope, selected, stage, before_cycle):
             save = rows(db, 'save_intents', DRAFT_COLUMNS['save_intents'], 1)[0]
         with closing(open_copy(working / DATABASES[1], HOST_COLUMNS)) as db:
             binding = rows(db, 'sync_bindings', HOST_COLUMNS['sync_bindings'], 1)[0]
-            need(validation._same(binding, dict(id=scope['binding_id'], remote_vault=scope['remote_vault'], state='active',
+            row_scope = scope
+            if bootstrap:
+                outbox = rows(db, 'outbox', HOST_COLUMNS['outbox'], 2)
+                pending = [row for row in outbox if validation._same(row['state'], 'pending')]
+                need(len(pending) == 1)
+                row_scope = validation.derived_association_scope(scope, binding['id'], pending[0]['operation_id'], manifest['collection_id'])
+            need(validation._same(binding, dict(id=row_scope['binding_id'], remote_vault=scope['remote_vault'], state='active',
                     cursor=0, endpoint=selected['endpoint'], account=selected['account'])))
             value = dict(schema=1, scope=scope, stage=stage, draft=draft, save=save,
                          file=rows(db, 'files', HOST_COLUMNS['files'], 1)[0],
                          binding={k: binding[k] for k in ('id', 'remote_vault', 'state', 'cursor')},
-                         association=association(db, scope, selected), outbox=rows(db, 'outbox', HOST_COLUMNS['outbox'], 2))
+                         association=association(db, row_scope, selected),
+                         outbox=outbox if bootstrap else rows(db, 'outbox', HOST_COLUMNS['outbox'], 2))
             if before_cycle:
                 del value['scope']
                 value.update(schema=2, association_scope=scope)
+            elif bootstrap:
+                del value['scope']
+                value.update(schema=3, capture_scope=scope, derived_operation_scope=row_scope)
             attempted = int(stage == 'quota-failed')
             for name, table in (('jobs', 'sync_jobs'), ('attempts', 'sync_attempts'), ('issuers', 'mobile_sync_attempt_devices'),
                                 ('heads', 'sync_heads'), ('inbox', 'sync_inbox'), ('conflicts', 'sync_conflicts')):
@@ -300,7 +332,9 @@ def _project(snapshot, working, *, scope, selected, stage, before_cycle):
                 if count:
                     need(db.execute('SELECT binding FROM ' + table).fetchall() == [(scope['binding_id'],)])
             value['commits'] = rows(db, 'sync_jobs', 'binding,operation_id,file_id,operation,base_revision,upload_id', attempted)
-        if before_cycle:
+        if bootstrap:
+            value = validation.before_associated_bootstrap(value, scope, row_scope)
+        elif before_cycle:
             value = validation.before_associated_capture(value, scope)
         elif stage == 'associated':
             validation._before(value, scope)
@@ -326,6 +360,23 @@ def _project(snapshot, working, *, scope, selected, stage, before_cycle):
             evidence.update(collection_id=manifest['collection_id'],
                 admission_metadata_canonical_sha256=manifest['admission_metadata_canonical_sha256'],
                 original_cycle_ids_present_at_capture=False, later_cycle_binding_verified=False)
+        elif bootstrap:
+            def typed_digest(closed):
+                raw = json.dumps(closed, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+                need(len(raw) <= validation.MAX_JSON)
+                return hashlib.sha256(raw).hexdigest()
+            envelope = dict(schema=1, collection_id=manifest['collection_id'],
+                original_manifest_raw_sha256=evidence['original_manifest_raw_sha256'],
+                capture_scope_typed_canonical_sha256=typed_digest(value['capture_scope']),
+                derived_operation_scope_typed_canonical_sha256=typed_digest(value['derived_operation_scope']),
+                projection_typed_canonical_sha256=typed_digest(value),
+                binding_upload_ids_derived_after_capture=True, raw_capture_scope_has_binding_upload_ids=False,
+                independent_capture_before_quota_launch_verified=False, Native_or_client_ACK=False, runtime=False)
+            evidence.update(collection_id=manifest['collection_id'],
+                admission_metadata_canonical_sha256=manifest['admission_metadata_canonical_sha256'],
+                original_cycle_ids_present_at_capture=False, later_cycle_binding_verified=False,
+                binding_upload_ids_derived_after_capture=True, raw_capture_scope_has_binding_upload_ids=False,
+                derivation_envelope=envelope)
         return QuotaProjection(value, evidence, note, spool)
     except (OSError, sqlite3.Error, ValueError, KeyError, IndexError, UnicodeError, RecursionError):
         raise RuntimeError('RELEASE_QUOTA_PROJECTION_UNAVAILABLE') from None

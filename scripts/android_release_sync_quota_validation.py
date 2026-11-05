@@ -14,6 +14,7 @@ BODY = '# 原始 Markdown 😀\n\n离线正文 / original content\n'.encode('utf
 HASH = '7662c0191d53f61020a020ca8b86238914ba39bdb017a48f9eb3dd709f5594d9'
 QUOTA = 32
 ASSOCIATED_BEFORE_CYCLE = 'associated-before-cycle'
+ASSOCIATED_BOOTSTRAP = 'associated-bootstrap-before-cycle'
 MAX_JSON = 32768
 MAX_INT = 2**63 - 1
 
@@ -93,6 +94,60 @@ def association_capture(value, collection_id, admission_digest):
     _need(_uuid(collection_id) and collection_id not in scope.values()
           and _pattern(admission_digest, r'[0-9a-f]{64}'))
     return scope
+
+
+def bootstrap_scope(value):
+    """Only identities observable before the original stopped DB capture."""
+    operations = ('login_operation_id', 'setup_operation_id', 'save_operation_id', 'association_operation_id')
+    keys = ('schema','owner_run','avd','boot_id','api','uid','product','sync',
+            'remote_vault','android_device','setup_device','preview_fingerprint',*operations)
+    _need(_closed(value, keys))
+    _need(_pattern(value['owner_run'], r'[1-9][0-9]{0,17}-[1-9][0-9]{0,5}')
+          and _same(value['schema'], 1) and _same(value['api'], 36)
+          and _same(value['avd'], 'opennexus-ci-'+value['owner_run'])
+          and _same(value['product'], PRODUCT) and _same(value['sync'], SYNC)
+          and type(value['uid']) is int and 10000 <= value['uid'] <= 99999)
+    _need(all(_uuid(value[k]) for k in ('boot_id',*operations))
+          and len({value[k] for k in ('boot_id',*operations)}) == len(operations)+1
+          and _pattern(value['preview_fingerprint'], r'[0-9a-f]{64}')
+          and all(_pattern(value[k], r'[0-9a-f]{32}') for k in ('remote_vault','android_device','setup_device'))
+          and value['android_device'] != value['setup_device'])
+    return dict(value)
+
+
+def bootstrap_capture(value, collection_id, admission_digest):
+    scope = bootstrap_scope(value)
+    _need(_uuid(collection_id) and collection_id not in scope.values()
+          and _pattern(admission_digest, r'[0-9a-f]{64}'))
+    return scope
+
+
+def derived_association_scope(value, binding_id, upload_operation_id, collection_id):
+    """Validate IDs derived from approved rows, never insert them into raw scope."""
+    scope = bootstrap_scope(value)
+    _need(_uuid(collection_id) and collection_id not in scope.values()
+          and _uuid(binding_id) and _uuid(upload_operation_id))
+    _need(binding_id != upload_operation_id and all(
+        identity != collection_id and identity not in scope.values() for identity in (binding_id, upload_operation_id)))
+    del scope['preview_fingerprint']
+    return association_scope(dict(scope, binding_id=binding_id, upload_operation_id=upload_operation_id))
+
+
+def before_associated_bootstrap(value, capture_scope, operation_scope):
+    capture_scope = bootstrap_scope(capture_scope)
+    operation_scope = association_scope(operation_scope)
+    keys = {'schema','capture_scope','derived_operation_scope','stage','draft','save','file','binding','association',
+            'outbox','jobs','attempts','issuers','commits','heads','inbox','conflicts'}
+    _need(_closed(value, keys) and _same(value['capture_scope'], capture_scope))
+    base = {k:v for k,v in operation_scope.items() if k not in ('binding_id','upload_operation_id')}
+    _need(_same(dict(base, preview_fingerprint=capture_scope['preview_fingerprint']), capture_scope))
+    derived = (operation_scope['binding_id'], operation_scope['upload_operation_id'])
+    _need(derived[0] != derived[1] and all(identity not in capture_scope.values() for identity in derived))
+    rows = {k:v for k,v in value.items() if k != 'capture_scope'}
+    expected = _associated_rows(rows, operation_scope, schema=3, scope_key='derived_operation_scope', stage=ASSOCIATED_BOOTSTRAP)
+    _need(_same(expected['association']['preview_fingerprint'], capture_scope['preview_fingerprint']))
+    expected['capture_scope'] = capture_scope
+    return json.loads(json.dumps(expected, separators=(',', ':'), ensure_ascii=True))
 
 
 def _before(value, scope):
