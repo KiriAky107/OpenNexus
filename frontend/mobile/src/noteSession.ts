@@ -198,7 +198,7 @@ export function createNoteSession(rpc: NativeRequest = mobileRequest) {
     state, edit, flush, save, checkResult, acceptImage, close, closeAfterDiscard, copy, dispose, clearError, reportError,
     openNote: (file_id: string) => open(() => rpc<DraftView>({ kind: 'open_note', file_id })),
     openDraft: (draft_id: string) => open(() => rpc<DraftView>({ kind: 'open_draft', draft_id })),
-    create: (path: string) => open(() => rpc<DraftView>({ kind: 'create_draft', path })),
+    create: (path: string, content?: string) => open(() => rpc<DraftView>({ kind: 'create_draft', path, ...(content === undefined ? {} : { content }) })),
     retryOriginal: () => original('apply_save'), cancelOriginal: () => original('cancel_save'),
     compositionStart: () => { state.composing = true; stopTimer() },
     compositionEnd: () => { state.composing = false; schedule() },

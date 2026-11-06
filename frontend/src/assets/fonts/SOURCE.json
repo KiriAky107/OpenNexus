@@ -1,0 +1,11 @@
+{
+  "source": "https://github.com/lxgw/LxgwWenKai-Lite/releases/download/v1.530/LXGWWenKaiLite-Regular.ttf",
+  "source_sha256": "f799a538a3355877e597a0ae04050e897932c9ae7689eb9227c2953c5dd549ea",
+  "source_bytes": 13949472,
+  "version": "v1.530",
+  "font_family": "OpenNexus Handwriting",
+  "changes": "Converted to WOFF and renamed font family to respect the reserved font names. Glyph outlines and copyright retained.",
+  "license": "https://raw.githubusercontent.com/lxgw/LxgwWenKai-Lite/v1.530/OFL.txt",
+  "output_sha256": "abff705323f2e91d236c9df6846796c5e88395a08caa46588d256a42b90a2aef",
+  "output_bytes": 8249628
+}

@@ -24,6 +24,8 @@ class ToolExecutionContext:
     reviewed_write: dict | None = None
     progress: Callable[[dict], Awaitable[None]] | None = None
     is_authorized: Callable[[], bool] | None = None
+    provider_id: str | None = None
+    model: str | None = None
 
 
 @dataclass(slots=True)

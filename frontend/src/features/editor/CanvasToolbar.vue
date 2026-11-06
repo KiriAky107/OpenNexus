@@ -3,7 +3,7 @@ import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import ControlIcon from '@/components/common/ControlIcon.vue'
 import { t as translate } from '@/i18n'
 const props=withDefaults(defineProps<{readOnly:boolean;selectionCount:number;edgeSelected:boolean;canUndo:boolean;canRedo:boolean;nodeCount:number;sidebar:boolean;showInspector?:boolean;arrangeEnabled?:boolean;touch?:boolean;language?:string}>(),{showInspector:true,arrangeEnabled:true})
-const emit=defineEmits<{addText:[];addFile:[];addLink:[];group:[];connect:[];undo:[];redo:[];copy:[];paste:[];remove:[];arrange:[];toggleInspector:[]}>()
+const emit=defineEmits<{addText:[];addHandwriting:[];addFile:[];addLink:[];group:[];connect:[];undo:[];redo:[];copy:[];paste:[];remove:[];arrange:[];toggleInspector:[]}>()
 const t=(zh:string,en:string)=>props.language==='en'?en:props.language==='zh-CN'?zh:translate(zh,en)
 const toolsOpen=ref(false),toolsMenu=ref<HTMLElement>(),toolsTrigger=ref<HTMLButtonElement>()
 function closeTools(event:PointerEvent){if(!toolsMenu.value?.contains(event.target as Node))toolsOpen.value=false}
@@ -23,7 +23,7 @@ defineExpose({closeMenu:()=>{if(!toolsOpen.value)return false;toolsOpen.value=fa
 
 <template>
     <div class="canvas-toolbar" :class="{'touch-toolbar':touch}" role="toolbar" :aria-label="t('画布操作','Canvas operations')">
-      <div class="canvas-tool-group">
+      <div class="canvas-tool-group"><button class="button-secondary" :disabled="readOnly" @click="emit('addHandwriting')">{{ t('手写','Handwriting') }}</button>
         <button class="button-secondary" :disabled="readOnly" @click="emit('addText')">{{ t('文字','Text') }}</button><button class="button-secondary" :disabled="readOnly" @click="emit('addFile')">{{ t('笔记／图片','Note / image') }}</button><button class="button-secondary" :disabled="readOnly" @click="emit('addLink')">{{ t('网址','URL') }}</button><button class="button-secondary" :disabled="readOnly" @click="emit('group')">{{ t('分组','Group') }}</button>
       </div>
       <div class="canvas-tool-group canvas-history-tools">

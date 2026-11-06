@@ -106,7 +106,7 @@ async function openTreeNode(node: FileNode) {
 const displayError = (code: string) => errorText(code, language.value)
 const number = (value: number) => new Intl.NumberFormat(language.value).format(value)
 
-interface PathDialog { kind: 'path'; action: 'create' | 'copy' | 'rename'; path: string; format: 'markdown' | 'canvas'; doc: NoteDocument | null; busy: boolean; error: string }
+interface PathDialog { content?: string; kind: 'path'; action: 'create' | 'copy' | 'rename'; path: string; format: 'markdown' | 'canvas'; doc: NoteDocument | null; busy: boolean; error: string }
 interface MutationDialog { kind: 'mutation'; intent: MutationIntent; doc: NoteDocument | null; busy: boolean; error: string }
 interface DiscardDialog { kind: 'discard'; id: string; edit_session: string; busy: boolean; error: string }
 interface LinkDialog { kind: 'link'; href: string; busy: boolean; error: string }
@@ -267,7 +267,7 @@ async function submitPath() {
   if (!active || active.kind !== 'path' || !active.path.trim() || active.busy) return
   const path = notePath(active.path, active.format); active.busy = true; active.error = ''
   try {
-    if (active.action === 'create') await session.create(path)
+    if (active.action === 'create') await session.create(path,active.content)
     else if (active.action === 'copy') await session.copy(path)
     else {
       const doc = active.doc
@@ -441,7 +441,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
       <p v-if="session.state.view.current_error" class="feedback">{{ copy.missing }}</p>
       <MobileCanvas v-if="isCanvas" :key="documentKey()" ref="canvas" :model-value="session.state.content" :language="language"
         :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked || navigationBusy" @update:model-value="session.edit" @composition-start="session.compositionStart"
-        @composition-end="session.compositionEnd" @error="session.reportError" @image="selectImage" @validation="pending => canvasFieldsPending = pending" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
+        @composition-end="session.compositionEnd" @error="session.reportError" @image="selectImage" @markdown="text => { openPath('create','markdown'); if(dialog?.kind==='path')dialog.content=text }" @validation="pending => canvasFieldsPending = pending" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
       <RichEditor v-else-if="editorMode==='wysiwyg'" v-show="!preview" :key="documentKey()" ref="editor" :model-value="session.state.content" :path="session.state.view.draft.path" :label="copy.body" :language="language" :theme="resolvedTheme" :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked || navigationBusy" @update:model-value="session.edit" @composition-start="session.compositionStart" @composition-end="session.compositionEnd" @error="session.reportError" @image="selectImage" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
       <MobileEditor v-else v-show="!preview" :key="documentKey()" ref="editor" :model-value="session.state.content" :label="copy.body" :language="language"
         :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked || navigationBusy" @update:model-value="session.edit" @composition-start="session.compositionStart"

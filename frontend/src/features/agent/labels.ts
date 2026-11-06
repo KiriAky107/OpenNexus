@@ -145,6 +145,7 @@ const permissionLabels: Record<string, string> = {
   'notes.search': '搜索笔记',
   'notes.read': '读取笔记',
   'notes.write': '修改笔记',
+  'canvas.write': '追加手写画布（逐次确认）',
   'notes.delete': '删除笔记',
   'tasks.read': '读取任务',
   'tasks.write': '修改任务',

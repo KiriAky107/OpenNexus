@@ -3,6 +3,8 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+#[cfg(target_os = "android")]
+mod mobile_ai;
 mod mobile_files;
 #[cfg(target_os = "android")]
 mod mobile_sync_commands;
@@ -33,6 +35,7 @@ struct Capabilities {
     sync: bool,
     credentials: bool,
     experiments: bool,
+    handwriting_ai: bool,
 }
 
 fn main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -40,6 +43,20 @@ fn main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
         return Err("MOBILE_WINDOW_DENIED".into());
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn mobile_ai(window: tauri::WebviewWindow, request: String) -> Result<String, String> {
+    main_window(&window)?;
+    #[cfg(target_os = "android")]
+    {
+        mobile_ai::dispatch(request).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = request;
+        Err("AI_PLATFORM_UNAVAILABLE".into())
+    }
 }
 
 #[tauri::command]
@@ -63,6 +80,7 @@ fn mobile_capabilities(window: tauri::WebviewWindow) -> Result<Capabilities, Str
         sync: false,
         credentials: cfg!(target_os = "android"),
         experiments: false,
+        handwriting_ai: cfg!(target_os = "android"),
     })
 }
 
@@ -149,6 +167,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             mobile_capabilities,
+            mobile_ai,
             mobile_vault,
             mobile_request,
             mobile_sync_auth,

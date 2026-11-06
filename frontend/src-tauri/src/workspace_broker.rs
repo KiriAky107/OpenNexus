@@ -1,9 +1,25 @@
 //! 受限的 Core RPC；每个请求都绑定到 Host 传输捕获的 Vault。
-use crate::workspace::Workspace;
+use crate::workspace::{Document, Workspace};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanvasRead {
+    vault_id: String,
+    path: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanvasWrite {
+    vault_id: String,
+    path: String,
+    expected: String,
+    content: String,
+    operation_id: String,
+    expected_file_id: Option<String>,
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Read {
@@ -42,6 +58,71 @@ struct AssetRead {
 }
 
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+fn canvas_snapshot(ws: &mut Workspace, path: &str) -> Result<Option<Document>, String> {
+    if path.len() > 1024
+        || !crate::canvas_contract::is_canvas(path)
+        || path
+            .split('/')
+            .any(|part| part.starts_with('.') || part.eq_ignore_ascii_case("opennexus-records"))
+    {
+        return Err("CANVAS_PATH_INVALID".into());
+    }
+    let absolute = ws.resolve(path).map_err(|e| e.code)?;
+    let metadata = match std::fs::symlink_metadata(&absolute) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("FILESYSTEM_ERROR".into()),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("CANVAS_PATH_INVALID".into());
+    }
+    if metadata.len() > crate::canvas_contract::MAX_CANVAS_BYTES as u64 {
+        return Err("CANVAS_TOO_LARGE".into());
+    }
+    ws.read(path).map(Some).map_err(|e| e.code)
+}
+
+#[cfg(test)]
+mod canvas_handwriting_tests {
+    use super::*;
+    #[test]
+    fn canvas_rpc_binds_original_identity_and_refuses_private_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let snapshot = json!({"rpc":"workspace.canvas.snapshot","params":{"vault_id":ws.vault_id,"path":"board.canvas"}});
+        assert!(dispatch(&mut ws, &snapshot).unwrap().is_null());
+        let content = "{\"nodes\":[],\"edges\":[],\"extension\":{\"keep\":true}}";
+        let mut write = json!({"rpc":"workspace.canvas.write","params":{"vault_id":ws.vault_id,"path":"board.canvas","expected":"","expected_file_id":null,"content":content,"operation_id":uuid::Uuid::new_v4().to_string()}});
+        let receipt = dispatch(&mut ws, &write).unwrap();
+        assert_eq!(receipt["state"], "committed");
+        let document = dispatch(&mut ws, &snapshot).unwrap();
+        assert_eq!(document["content"], content);
+        write["params"]["expected"] = document["hash"].clone();
+        write["params"]["expected_file_id"] = json!("another-file");
+        write["params"]["operation_id"] = json!(uuid::Uuid::new_v4().to_string());
+        assert_eq!(
+            dispatch(&mut ws, &write).unwrap_err(),
+            "CANVAS_CONTENT_CONFLICT"
+        );
+        assert_eq!(ws.read("board.canvas").unwrap().content, content);
+        for path in [
+            ".ainote/secret.canvas",
+            "opennexus-records/secret.canvas",
+            "../secret.canvas",
+        ] {
+            let mut rejected = snapshot.clone();
+            rejected["params"]["path"] = json!(path);
+            assert!(dispatch(&mut ws, &rejected).is_err());
+        }
+        let mut other = snapshot;
+        other["params"]["vault_id"] = json!("another-vault");
+        assert_eq!(
+            dispatch(&mut ws, &other).unwrap_err(),
+            "VAULT_PERMISSION_CHANGED"
+        );
+    }
+}
 
 fn valid_asset_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
@@ -267,6 +348,40 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(json!({"items":items,"total":total}))
+        }
+        "workspace.canvas.snapshot" => {
+            let p: CanvasRead = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            if !crate::canvas_contract::is_canvas(&p.path) {
+                return Err("CANVAS_PATH_INVALID".into());
+            }
+            serde_json::to_value(canvas_snapshot(ws, &p.path)?)
+                .map_err(|_| "HOST_SERIALIZE_FAILED".into())
+        }
+        "workspace.canvas.write" => {
+            let p: CanvasWrite = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            if !crate::canvas_contract::is_canvas(&p.path) {
+                return Err("CANVAS_PATH_INVALID".into());
+            }
+            crate::canvas_contract::validate(p.content.as_bytes()).map_err(|e| e.code)?;
+            match canvas_snapshot(ws, &p.path)? {
+                Some(document)
+                    if Some(&document.entry.file_id) == p.expected_file_id.as_ref()
+                        && document.entry.hash == p.expected => {}
+                None if p.expected_file_id.is_none() && p.expected.is_empty() => {}
+                _ => return Err("CANVAS_CONTENT_CONFLICT".into()),
+            }
+            let entry = ws
+                .write_operation(
+                    &p.path,
+                    &p.expected,
+                    p.content.as_bytes(),
+                    "local",
+                    &p.operation_id,
+                )
+                .map_err(|e| e.code)?;
+            Ok(json!({"operation_id":p.operation_id,"state":"committed","result":entry}))
         }
         "workspace.read" => {
             let p: Read = decode(params)?;

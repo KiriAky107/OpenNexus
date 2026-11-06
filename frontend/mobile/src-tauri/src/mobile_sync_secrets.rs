@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 const MAX_SECRET: usize = 64 * 1024;
 const NAMESPACE: &str = "opennexus.sync.v1";
 static STORE: OnceLock<NativeSecretStore> = OnceLock::new();
+static AI_STORE: OnceLock<NativeSecretStore> = OnceLock::new();
 
 #[derive(Debug)]
 pub(crate) struct SecretError(pub(crate) &'static str);
@@ -32,6 +33,9 @@ type Result<T> = std::result::Result<T, SecretError>;
 
 pub(crate) struct CredentialScope(String);
 impl CredentialScope {
+    pub(crate) fn ai_profile() -> Self {
+        Self("handwriting-provider-v1".into())
+    }
     pub(crate) fn for_client(client: &SyncClient, account: &str, device: &str) -> Result<Self> {
         let scope = notesagent_host::mobile_sync_session::Scope::new(client.endpoint(), account)
             .map_err(|_| SecretError("SYNC_CREDENTIALS_INVALID"))?;
@@ -154,6 +158,11 @@ fn wipe_array(env: &mut Env<'_>, bytes: &JByteArray<'_>) -> std::result::Result<
 }
 
 impl NativeSecretStore {
+    pub(crate) fn ai() -> Result<&'static Self> {
+        AI_STORE
+            .get()
+            .ok_or(SecretError("SYNC_CREDENTIALS_UNAVAILABLE"))
+    }
     fn new(
         env: &mut Env<'_>,
         context: &JObject<'_>,
@@ -254,11 +263,20 @@ pub(crate) fn initialize(
     env: &mut Env<'_>,
     context: &JObject<'_>,
 ) -> std::result::Result<(), JniError> {
-    if NativeSecretStore::global().is_ok() {
-        return Ok(());
+    if NativeSecretStore::global().is_err() {
+        let store = NativeSecretStore::new(env, context, None)?;
+        let _ = STORE.set(store);
     }
-    let store = NativeSecretStore::new(env, context, None)?;
-    let _ = STORE.set(store);
+    if AI_STORE.get().is_none() {
+        match NativeSecretStore::new(env, context, Some("opennexus.ai.v1")) {
+            Ok(ai) => {
+                let _ = AI_STORE.set(ai);
+            }
+            Err(_) => {
+                env.exception_clear();
+            } // AI stays unavailable; never break the existing Sync store.
+        }
+    }
     Ok(())
 }
 

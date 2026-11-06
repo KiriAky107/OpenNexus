@@ -79,6 +79,17 @@ it.each(['experiments.run', 'experiments.import'])('does not offer session appro
   expect(wrapper.findAll('button').some(item => item.text() === '本次会话允许')).toBe(false)
   wrapper.unmount()
 })
+it('requires the original canvas preview and permits only this append', async () => {
+  vi.mocked(getPermissionPreview).mockResolvedValue({...preview,kind:'canvas_handwriting',file_path:'notes.canvas',operation:'append'})
+  const wrapper=mount(PermissionReview,{props:{...props,allowSession:true,call:{name:'canvas.handwrite'}}})
+  expect(button(wrapper,'允许本次').attributes('disabled')).toBeDefined()
+  await flushPromises()
+  expect(wrapper.text()).toContain('保留原有笔迹')
+  expect(wrapper.findAll('button').some(item=>item.text()==='本次会话允许')).toBe(false)
+  await button(wrapper,'允许本次').trigger('click');await flushPromises()
+  expect(respondToPermission).toHaveBeenCalledWith('run','request','allow_once','revision-one')
+  wrapper.unmount()
+})
 
 function runPreview(): AgentExperimentReview & { kind: 'experiment_run' } {
   return { kind: 'experiment_run', token: 'bound-native-review', vault_id: 'one', operation_id: 'owned-run', fingerprint: 'a'.repeat(64),

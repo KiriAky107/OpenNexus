@@ -25,6 +25,21 @@ describe('mobile editor persistence and request ownership', () => {
     const rpc = vi.fn(fn), s = createNoteSession(rpc as NativeRequest)
     sessions.push(s); return { s, rpc }
   }
+  it('persists original canvas edits before opening a converted Markdown draft',async()=>{
+    const original=view('canvas','{"nodes":[],"edges":[]}'),converted=view('text','# Recognized')
+    const {s,rpc}=session(async request=>{
+      if(request.kind==='open_draft')return original
+      if(request.kind==='persist_draft')return {...original.draft,content:request.content,generation:request.generation}
+      if(request.kind==='create_draft')return {...converted,draft:{...converted.draft,path:request.path,content:request.content??''}}
+      throw Error(`Unexpected ${request.kind}`)
+    })
+    await s.openDraft('canvas');s.edit('{"nodes":[{"originalInk":true}]}')
+    await s.create('recognized.md','# Recognized')
+    const calls=rpc.mock.calls.map(([request])=>request)
+    expect(calls.findIndex(r=>r.kind==='persist_draft')).toBeLessThan(calls.findIndex(r=>r.kind==='create_draft'))
+    expect(s.state.content).toBe('# Recognized')
+    expect(calls.filter(r=>r.kind==='create_draft')).toHaveLength(1)
+  })
 
   it('clears a recovered draft error but cannot clear newer feedback with an older acknowledgement', async () => {
     const a = view(), acknowledgement = deferred<Draft>(); let failing = true, delayed = false

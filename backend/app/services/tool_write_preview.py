@@ -2,10 +2,13 @@
 from app.services import note_preview
 
 ACTION_TOOLS = frozenset({'experiments.run', 'experiments.import'})
-WRITE_TOOLS = note_preview.WRITE_TOOLS | {'experiments.files.write'} | ACTION_TOOLS
+WRITE_TOOLS = {'canvas.handwrite'} | note_preview.WRITE_TOOLS | {'experiments.files.write'} | ACTION_TOOLS
 
 
 async def preview_write(call, run_id=None, request_id=None):
+    if call.name == 'canvas.handwrite':
+        from app.agent.canvas_tools import preview_write as preview
+        return await preview(call)
     if call.name in ACTION_TOOLS:
         from app.agent.experiment_actions import preview_action
         return await preview_action(call, run_id, request_id)
@@ -17,6 +20,9 @@ async def preview_write(call, run_id=None, request_id=None):
 
 
 async def validate_preview(call, preview):
+    if call.name == 'canvas.handwrite':
+        from app.agent.canvas_tools import validate_preview as validate
+        return await validate(call, preview)
     if call.name in ACTION_TOOLS:
         from app.agent.experiment_actions import validate_preview as validate
         return await validate(call, preview)

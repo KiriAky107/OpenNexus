@@ -22,7 +22,7 @@ class SyncCredentialStore @JvmOverloads constructor(context: Context, private va
     private val alias: String
 
     init {
-        require(namespace.matches(Regex("opennexus\\.sync\\.[a-zA-Z0-9.-]{1,80}"))) { "SYNC_CREDENTIALS_INVALID" }
+        require(namespace == "opennexus.ai.v1" || namespace.matches(Regex("opennexus\\.sync\\.[a-zA-Z0-9.-]{1,80}"))) { "SYNC_CREDENTIALS_INVALID" }
         directory = try { File(context.applicationContext.noBackupFilesDir.canonicalFile, "sync-credentials/" + hash(namespace.toByteArray(Charsets.UTF_8))) }
             catch (_: Exception) { throw IllegalStateException("SYNC_CREDENTIALS_UNAVAILABLE") }
         alias = "$namespace.aes-gcm"
