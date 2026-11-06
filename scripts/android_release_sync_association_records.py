@@ -13,6 +13,8 @@ import android_release_sync_quota_validation as quota
 PHASE = 'associate-bootstrap-signed-original'
 ENTRY = 'ReleaseSyncAssociationBootstrapRuntimeProbe'
 PROFILE = 'signed-association-bootstrap-completion-stop-v1'
+COMPLETION_PROFILE = 'signed-association-bootstrap-completion-only-v1'
+COMPLETION_KEYS = ('schema','capture_scope','identity','collection_id','original_lifetime','driver','intent_read')
 INTENT_PATH = 'no_backup/owned-sync-association-intent.json'
 LINES = (
     b'OPENNEXUS_SIGNED_ASSOCIATION_BOOTSTRAP_UI association_confirmed_UI_observed=true original_intent_written=true raw_UI_recorded=false native_original_state_verified=false',
@@ -40,6 +42,33 @@ def number(value, maximum=MAX):
     return value
 
 
+def _known_ids(scope):
+    return {v for v in scope.values() if type(v) is str and quota._uuid(v)}
+
+
+def _fresh(identifier, used):
+    need(quota._uuid(identifier) and identifier not in used)
+    used.add(identifier)
+    return identifier
+
+
+def association_launch_scope(value):
+    """Known pre-association identities only; no placeholders for GUI IDs."""
+    operations = ('login_operation_id','setup_operation_id','save_operation_id')
+    closed(value, ('schema','owner_run','avd','boot_id','api','uid','product','sync',
+                   'remote_vault','android_device','setup_device',*operations))
+    need(quota._pattern(value['owner_run'], r'[1-9][0-9]{0,17}-[1-9][0-9]{0,5}')
+         and quota._same(value['schema'], 1) and quota._same(value['api'], 36)
+         and quota._same(value['avd'], 'opennexus-ci-'+value['owner_run'])
+         and quota._same(value['product'], quota.PRODUCT) and quota._same(value['sync'], quota.SYNC)
+         and type(value['uid']) is int and 10000 <= value['uid'] <= 99999)
+    need(all(quota._uuid(value[k]) for k in ('boot_id',*operations))
+         and len({value[k] for k in ('boot_id',*operations)}) == len(operations)+1
+         and all(quota._pattern(value[k], r'[0-9a-f]{32}') for k in ('remote_vault','android_device','setup_device'))
+         and value['android_device'] != value['setup_device'])
+    return dict(value)
+
+
 def bounded_json(raw, bound):
     need(type(raw) is bytes and 0 < len(raw) <= bound)
 
@@ -55,6 +84,29 @@ def bounded_json(raw, bound):
         return json.loads(raw.decode('utf-8'), object_pairs_hook=pairs, parse_constant=constant)
     except (UnicodeError, json.JSONDecodeError, RecursionError):
         raise ValueError('SIGNED_ASSOCIATION_REPORT_CORRELATION_UNAVAILABLE') from None
+
+
+def _association_intent(raw, remote_vault):
+    intent = bounded_json(raw, 2048)
+    closed(intent, ('operation_id','preview_fingerprint','remote_vault'))
+    need(quota._uuid(intent['operation_id']) and quota._pattern(intent['preview_fingerprint'], r'[0-9a-f]{64}'))
+    exact(intent['remote_vault'], remote_vault)
+    return intent
+
+
+def capture_scope_from_intent(launch_scope, original_intent, *, collection_id, command_id):
+    """Derive typed scope from supplied actual fields, without IO or hashing.
+
+    The owning producer must separately bind driver completion, response and
+    chronology. This pure derivation supplies no such original provenance.
+    """
+    base = association_launch_scope(launch_scope)
+    used = _known_ids(base)
+    _fresh(collection_id, used); _fresh(command_id, used)
+    intent = _association_intent(original_intent, base['remote_vault'])
+    _fresh(intent['operation_id'], used)
+    return quota.bootstrap_scope(dict(base, association_operation_id=intent['operation_id'],
+                                      preview_fingerprint=intent['preview_fingerprint']))
 
 
 def approved_stdout(raw):
@@ -88,33 +140,21 @@ def owner(value, life, identity, *, at_command=False):
     return at
 
 
-def validate_association_reports(value, original_intent, original_stdout, original_stderr):
-    """Validate only supplied closed reports and bytes; return detached metadata.
-
-    Every field and stream closes before hashing. True reported facts do not
-    implement OriginalQuotaBootstrapAdmission or independently attest actions.
-    All times here are original host-domain integers, never Android elapsed.
-    """
-    closed(value, ('schema','capture_scope','identity','collection_id','original_lifetime',
-                   'driver','intent_read','stop'))
+def _completion_value(value, original_intent, original_stdout, original_stderr):
+    """Close only supplied completion fields/bytes, with no future stop/hash."""
+    closed(value, COMPLETION_KEYS)
     exact(value['schema'], 1)
     scope = quota.bootstrap_scope(value['capture_scope'])
     identity, life = value['identity'], value['original_lifetime']
     common.owned_identity(identity, scope)
     common.lifetime(life, scope)
-    ids = {v for v in scope.values() if type(v) is str and quota._uuid(v)}
-
-    def fresh(identifier):
-        need(quota._uuid(identifier) and identifier not in ids)
-        ids.add(identifier)
-        return identifier
-
-    collection = fresh(value['collection_id'])
+    ids = _known_ids(scope)
+    collection = _fresh(value['collection_id'], ids)
     driver = value['driver']
     closed(driver, ('phase','entry','command_id','arguments','timeout_ms','started_monotonic_ms',
         'deadline_monotonic_ms','first_exit_seen_monotonic_ms','streams_read_started_monotonic_ms',
         'streams_read_returned_monotonic_ms','instrument_result','final_owner'))
-    command_id = fresh(driver['command_id'])
+    command_id = _fresh(driver['command_id'], ids)
     start = number(driver['started_monotonic_ms'], MAX-180000)
     deadline = start+180000
     exited = number(driver['first_exit_seen_monotonic_ms'])
@@ -143,15 +183,52 @@ def validate_association_reports(value, original_intent, original_stdout, origin
         started_monotonic_ms=read_start, returned_monotonic_ms=read_end))
     need(start <= exited <= stream_start <= stream_end <= read_start <= read_end <= final <= deadline
          and read_end <= read_start+1000)
-    intent = bounded_json(original_intent, 2048)
+    intent = _association_intent(original_intent, scope['remote_vault'])
     expected_intent = dict(operation_id=scope['association_operation_id'],
         preview_fingerprint=scope['preview_fingerprint'], remote_vault=scope['remote_vault'])
     exact(intent, expected_intent)
+    approved_stdout(original_stdout)
+    need(type(original_stderr) is bytes and original_stderr == b'')
+    need(len(common.encoded(value)) <= LIMIT and all(len(common.encoded(v)) <= 4096 for v in value.values()))
+    return dict(scope=scope, identity=identity, life=life, ids=ids, collection=collection,
+                command_id=command_id, intent=expected_intent, final=final)
+
+
+def validate_association_completion(value, original_intent, original_stdout, original_stderr):
+    """Explicit detached completion-only report, never a stop/runtime gate.
+
+    No cryptographic hash occurs, including success. Original bytes are not
+    returned; typed intent metadata is not a private file hash or readback ACK.
+    """
+    context = _completion_value(value, original_intent, original_stdout, original_stderr)
+    result = dict(schema=1, profile=COMPLETION_PROFILE, completion=value, association_intent=context['intent'],
+        completion_only=True, completed_driver_reported=True, stop_reported=False,
+        original_managed_process_independently_verified=False, raw_intent_reader_independently_verified=False,
+        original_private_files_independently_verified=False, actual_separate_syscalls_verified=False,
+        collector_bracketing_samples_verified=False, capture_before_quota_chronology_verified=False,
+        Native_or_client_ACK=False, runtime_verified=False)
+    raw = common.encoded(result)
+    need(len(raw) <= LIMIT)
+    return json.loads(raw)
+
+
+def validate_association_reports(value, original_intent, original_stdout, original_stderr):
+    """Exact full report: completion AND stop close before any hashing.
+
+    True reported facts do not implement OriginalQuotaBootstrapAdmission or
+    independently attest actions. Times are host-domain, not Android elapsed.
+    """
+    closed(value, (*COMPLETION_KEYS,'stop'))
+    completion = {k:v for k,v in value.items() if k != 'stop'}
+    context = _completion_value(completion, original_intent, original_stdout, original_stderr)
+    scope, identity, life = (context[k] for k in ('scope','identity','life'))
+    collection, command_id, ids = (context[k] for k in ('collection','command_id','ids'))
+    final, expected_intent = context['final'], context['intent']
 
     stop = value['stop']
     closed(stop, ('schema','phase','driver_command_id','stop_intent_id','original_lifetime','owned_boot',
         'intent','intent_written_monotonic_ms','before_command_owner','at_command_owner','result','command_clock','observations'))
-    stop_id = fresh(stop['stop_intent_id'])
+    stop_id = _fresh(stop['stop_intent_id'], ids)
     before = owner(stop['before_command_owner'], life, identity)
     at = owner(stop['at_command_owner'], life, identity, at_command=True)
     written = number(stop['intent_written_monotonic_ms'])
@@ -171,7 +248,7 @@ def validate_association_reports(value, original_intent, original_stdout, origin
             'owned_boot','root_uid','sample_start_monotonic_ms','sample_end_monotonic_ms','original_pid_absent',
             'all_owned_package_processes_absent','user0_force_stopped','original_driver_completed',
             'raw_process_list_exported','native_cycle_acknowledged'))
-        observation_id = fresh(sample['observation_id'])
+        observation_id = _fresh(sample['observation_id'], ids)
         sample_ids.append(observation_id)
         begin, end = number(sample['sample_start_monotonic_ms']), number(sample['sample_end_monotonic_ms'])
         need(previous <= begin <= end <= stop_start+5000)
@@ -187,14 +264,10 @@ def validate_association_reports(value, original_intent, original_stdout, origin
             snapshot_stop_only=True, automatic_retry=False), intent_written_monotonic_ms=written,
         before_command_owner=stop['before_command_owner'], at_command_owner=stop['at_command_owner'],
         result=stop['result'], command_clock=clock, observations=samples))
-    approved_stdout(original_stdout)
-    need(type(original_stderr) is bytes and original_stderr == b'')
-
     # All retained objects are now closed. No unknown string/object is hashed,
     # stringified, repaired or emitted on any earlier refusal path.
     encoded = common.encoded(value)
     need(len(encoded) <= LIMIT and all(len(common.encoded(v)) <= 4096 for v in value.values()))
-    completion = {k:v for k,v in value.items() if k != 'stop'}
     result = dict(schema=1, profile=PROFILE, capture_scope=scope, identity=identity, collection_id=collection,
         driver_command_id=command_id, stop_intent_id=stop_id, observation_ids=sample_ids,
         association_intent_raw_sha256=hashlib.sha256(original_intent).hexdigest(),
