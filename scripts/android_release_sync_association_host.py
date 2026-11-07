@@ -10,6 +10,39 @@ import shlex
 import android_release_sync_association_records as records
 import android_release_sync_quota_records as common
 
+_HANDOFF_KEY = object()
+
+
+class OriginalAssociationCompletionHandoff:
+    """Single-use in-process ownership discipline, not private runtime proof.
+
+    No caller metadata constructor or raw public accessor. Python object/type
+    identity is not a security boundary or independent factory/syscall evidence.
+    """
+    def __init__(self, issuer, key):
+        if key is not _HANDOFF_KEY or type(issuer) is not OriginalAssociationHostCompletion:
+            raise RuntimeError('SIGNED_ASSOCIATION_COMPLETION_HANDOFF_UNAVAILABLE')
+        self._issuer, self._consumer = issuer, None
+
+    def _claim(self, consumer):
+        issuer = self._issuer
+        issuer._require(issuer._state == 'HANDED_OFF' and issuer._handoff is self and self._consumer is None)
+        self._consumer = consumer
+        issuer._state = 'CONSUMED'
+        return (issuer._writer_buffer, *issuer._approved, issuer._writer_guard, issuer._ports)
+
+    def _check(self, consumer):
+        issuer = self._issuer
+        issuer._require(issuer._state == 'CONSUMED' and issuer._handoff is self and self._consumer is consumer)
+
+    def _invalidate(self, consumer):
+        if self._consumer is consumer:
+            self._issuer._state = 'FAILED'
+
+    def _finish(self, consumer):
+        self._check(consumer)
+        self._issuer._state = 'STOP_REPORTED'
+
 
 class OriginalAssociationCompletionPorts(ABC):
     @abstractmethod
@@ -58,6 +91,7 @@ class OriginalAssociationHostCompletion:
     def __init__(self, ports, *, launch_scope, identity, lifetime, collection_id, command_id):
         self._state = 'NEW'
         self._approved = None
+        self._writer_buffer = self._writer_guard = self._handoff = None
         self._require(isinstance(ports, OriginalAssociationCompletionPorts))
         base = records.association_launch_scope(launch_scope)
         common.owned_identity(identity, base)
@@ -108,6 +142,14 @@ class OriginalAssociationHostCompletion:
         except BaseException:
             self._state = 'FAILED'
             raise RuntimeError('SIGNED_ASSOCIATION_HOST_COMPLETION_UNAVAILABLE') from None
+
+    def handoff(self):
+        """Transfer original immutable RAM once, without new port/read/clock."""
+        self._require(self._state == 'DONE' and self._handoff is None and self._approved is not None
+                      and type(self._writer_buffer) is bytes and type(self._writer_guard) is int)
+        self._state = 'HANDED_OFF'
+        self._handoff = OriginalAssociationCompletionHandoff(self, _HANDOFF_KEY)
+        return self._handoff
 
     def _run(self):
         context = self._context
@@ -199,9 +241,10 @@ class OriginalAssociationHostCompletion:
         self._require(len(raw) <= records.LIMIT)
         written = self._call(self._ports.record, 'signed-association-bootstrap-completion.json', raw)
         self._require(written is None)
-        self._now()
+        writer_guard = self._now()
         # Approved immutable originals remain private RAM for a future owning
         # stop/admission design; no raw public accessor or readback ACK exists.
         self._approved = (intent, stdout, stderr)
+        self._writer_buffer, self._writer_guard = raw, writer_guard
         self._state = 'DONE'
         return json.loads(raw)
