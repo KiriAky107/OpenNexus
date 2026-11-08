@@ -409,7 +409,9 @@ public final class RuntimeProbe extends Instrumentation {
         waitNode(this::documentsUi, "system document picker");
         activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
         activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
-        activate(waitNode(node -> documentsUi(node) && label(node, "opennexus-ci-original.png", false), "owned original PNG"));
+        activate(waitNode(node -> documentsUi(node) && (label(node, "opennexus-ci-original.png", false)
+            || ("android.widget.LinearLayout".equals(string(node.getClassName()))
+                && string(node.getContentDescription()).startsWith("opennexus-ci-original.png, "))), "owned original PNG"));
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
     }
 
