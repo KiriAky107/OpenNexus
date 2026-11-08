@@ -114,6 +114,7 @@ jobs:
           pnpm --dir frontend test mobile/src
           python3 -m unittest discover -s scripts -p test_verify_android_package.py -v
           python3 -m unittest discover -s scripts -p test_android_runtime_probe.py -v
+          python3 -B -m unittest discover -s scripts -p test_android_runtime_build_origin.py -v
       - name: Freeze the checkout before compiling
         run: python3 scripts/record-build-source.py --commit "$GITHUB_SHA"
       - name: Build both native Android ABIs

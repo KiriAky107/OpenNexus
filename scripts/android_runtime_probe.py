@@ -99,16 +99,46 @@ def validate_binding(bundle, commit):
     return apk, proof
 
 
-def validate_build_job(run, jobs, commit):
-    require(run.get('head_sha') == commit and run.get('path') == '.github/workflows/android.yml', 'APK build run source mismatch')
+def validate_build_job(run, jobs, commit, compiled=None):
+    require(run.get('path') == '.github/workflows/android.yml', 'APK build run source mismatch')
+    parents = None
+    if run.get('head_sha') != commit:
+        # PR runs report the branch head, while GITHUB_SHA compiles its merge commit.
+        # Accept that source only through the immutable commit's exact ordered parents.
+        prs = run.get('pull_requests')
+        require(run.get('event') == 'pull_request' and isinstance(prs, list) and len(prs) == 1
+            and isinstance(prs[0], dict) and isinstance(compiled, dict), 'APK build run source mismatch')
+        head, base = prs[0].get('head', {}), prs[0].get('base', {})
+        repository_id = run.get('repository', {}).get('id')
+        require(isinstance(head, dict) and isinstance(base, dict)
+            and type(repository_id) is int and repository_id > 0
+            and head.get('repo', {}).get('id') == base.get('repo', {}).get('id') == repository_id
+            and head.get('sha') == run.get('head_sha') and head.get('ref') == run.get('head_branch')
+            and all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{40}', value)
+                for value in (head.get('sha'), base.get('sha'), commit))
+            and head['sha'] != base['sha'] and compiled.get('sha') == commit,
+            'APK build run source mismatch')
+        parents = compiled.get('parents')
+        require(isinstance(parents, list) and len(parents) == 2
+            and all(isinstance(parent, dict) for parent in parents)
+            and [parent.get('sha') for parent in parents] == [base['sha'], head['sha']],
+            'APK build run source mismatch')
     builds = [job for job in jobs if job.get('name') == 'debug-apk']
     require(len(builds) == 1 and builds[0].get('status') == 'completed'
-        and builds[0].get('conclusion') == 'success', 'APK build job has no successful terminal result')
-    return {'run_id': run['id'], 'job_id': builds[0]['id'], 'head_sha': commit, 'head_branch': run['head_branch']}
+        and builds[0].get('conclusion') == 'success'
+        and type(builds[0].get('run_id')) is int and builds[0]['run_id'] == run.get('id')
+        and builds[0].get('head_sha') == run.get('head_sha')
+        and type(builds[0].get('run_attempt')) is int
+        and builds[0]['run_attempt'] == run.get('run_attempt'), 'APK build job has no successful terminal result')
+    return {'run_id': run['id'], 'job_id': builds[0]['id'], 'head_sha': run['head_sha'],
+        'head_branch': run['head_branch'], 'source_commit': commit,
+        'source_kind': 'pull_request_merge' if parents is not None else 'head',
+        'merge_parents': [parent['sha'] for parent in parents] if parents is not None else None}
 
 
 def build_job_origin(run_id, commit):
     require(re.fullmatch(r'[1-9][0-9]{0,17}', run_id), 'Invalid APK build run id')
+    require(re.fullmatch(r'[0-9a-f]{40}', commit), 'Invalid APK build source commit')
     repository = os.environ['GITHUB_REPOSITORY']
     require(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository), 'Invalid CI repository')
     def read(path):
@@ -124,7 +154,10 @@ def build_job_origin(run_id, commit):
         finally:
             connection.close()
     base = f'/repos/{repository}/actions/runs/{run_id}'
-    return validate_build_job(read(base), read(base + '/jobs?per_page=100')['jobs'], commit)
+    run, jobs = read(base), read(base + '/jobs?per_page=100')['jobs']
+    compiled = read(f'/repos/{repository}/git/commits/{commit}') if (
+        run.get('event') == 'pull_request' and run.get('head_sha') != commit) else None
+    return validate_build_job(run, jobs, commit, compiled)
 
 
 def require_hosted_emulator(serial):
