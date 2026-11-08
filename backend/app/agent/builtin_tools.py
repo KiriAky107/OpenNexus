@@ -208,6 +208,8 @@ def _register(
 
 
 def register_builtin_tools(registry: ToolRegistry) -> None:
+    from app.agent.canvas_tools import register as register_canvas
+    register_canvas(registry)
     from app.agent.markdown_tools import register
     register(registry)
     from app.agent.experiment_tools import register as register_experiments

@@ -915,6 +915,8 @@ class AgentRuntime:
                         reviewed_write=reviewed_write,
                         progress=experiment_progress,
                         is_authorized=still_authorized,
+                        provider_id=record.request.provider_id,
+                        model=record.request.model,
                     ),
                 ),
                 timeout=record.request.tool_timeout_seconds,

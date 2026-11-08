@@ -12,9 +12,10 @@ const emit = defineEmits<{ resolved: [] }>()
 const workspace = useWorkspaceStore()
 const isNote = computed(() => ['notes.create', 'notes.update', 'notes.patch_markdown'].includes(String(props.call.name)))
 const isSource = computed(() => props.call.name === 'experiments.files.write')
+const isCanvas = computed(() => props.call.name === 'canvas.handwrite')
 const isAction = computed(() => ['experiments.run', 'experiments.import'].includes(String(props.call.name)))
-const needsPreview = computed(() => isNote.value || isSource.value || isAction.value)
-const onceOnly = computed(() => isSource.value || isAction.value)
+const needsPreview = computed(() => isNote.value || isSource.value || isCanvas.value || isAction.value)
+const onceOnly = computed(() => isSource.value || isCanvas.value || isAction.value)
 const preview = ref<PermissionPreview>()
 const actionPreview = computed(() => preview.value?.kind === 'experiment_run' || preview.value?.kind === 'experiment_import' ? preview.value as AgentExperimentReview : undefined)
 const writePreview = computed(() => preview.value && !actionPreview.value ? preview.value as NoteWritePreview : undefined)
@@ -29,6 +30,9 @@ async function load() {
   try {
     const value = await getPermissionPreview(run, ticket)
     if (version !== generation) return
+    if (isCanvas.value && value.kind !== 'canvas_handwriting') {
+      throw new Error(t('画布预览不匹配，请重新审核。', 'The canvas preview does not match. Review it again.'))
+    }
     if (isAction.value) {
       if ((value.kind !== 'experiment_run' && value.kind !== 'experiment_import')
         || value.kind !== (props.call.name === 'experiments.run' ? 'experiment_run' : 'experiment_import')
@@ -90,6 +94,7 @@ async function decide(decision: 'allow_once' | 'allow_session' | 'deny') {
     <template v-if="writePreview">
       <p><strong>{{ isSource ? (writePreview.overwrite ? t('替换实验文件', 'Replace experiment file') : t('创建实验文件', 'Create experiment file')) : writePreview.operation === 'create' ? t('创建笔记', 'Create note') : writePreview.operation === 'append' ? t('追加内容', 'Append content') : t('替换内容', 'Replace content') }}</strong> · {{ writePreview.file_path }}</p>
       <p v-if="isSource">{{ t('文件大小', 'File size') }}: {{ writePreview.before_bytes }} → {{ writePreview.after_bytes }} B · {{ t('仅保存文件；运行与成果导入需要另行确认。', 'Saves the file only; running and importing outputs require separate confirmation.') }}</p>
+      <p v-if="isCanvas">{{ t('追加可编辑手写文字，保留原有笔迹；每次写入单独确认。', 'Appends editable handwriting and keeps original ink. Each write requires its own approval.') }}</p>
       <p v-if="writePreview.metadata.title !== null">{{ t('标题', 'Title') }}: {{ writePreview.metadata.title }}</p>
       <p v-if="writePreview.metadata.tags !== null">{{ t('标签', 'Tags') }}: {{ writePreview.metadata.tags.join(', ') || t('无', 'None') }}</p>
       <NoteDiff :diff="writePreview.diff" />

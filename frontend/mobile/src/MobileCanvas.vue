@@ -9,11 +9,28 @@ import CanvasToolbar from '../../src/features/editor/CanvasToolbar.vue'
 import { resolveCanvasFile } from '../../src/services/workspaceDocuments'
 import { CanvasGestures, type CanvasGestureTarget } from './canvasGestures'
 import { canvasText } from './canvasLocale'
+import MobileHandwritingAi from './MobileHandwritingAi.vue'
+import { mobileRequest } from './native'
+import type { NoteDocument } from './types'
+import { emptyHandwriting, handwritingOf, type Handwriting } from '../../src/features/editor/handwriting'
+import { applyHandwritingProposal, type HandwritingProposal } from '../../src/features/editor/handwritingActions'
 import { canvasImagePath, createCanvasImages } from './canvasImages'
 import type { Language } from './locale'
 
 const props = defineProps<{ modelValue: string; language: Language; readOnly?: boolean }>()
-const emit = defineEmits<{ 'update:modelValue': [source: string]; error: [code: string]; compositionStart: []; compositionEnd: []; link: [href: string]; image: []; validation: [pending: boolean] }>()
+const emit = defineEmits<{ 'update:modelValue': [source: string]; error: [code: string]; compositionStart: []; compositionEnd: []; link: [href: string]; image: []; markdown: [text:string]; validation: [pending: boolean] }>()
+const handwriting=ref<{id?:string;source:string;ink:Handwriting;text:string}>(),handwritingPanel=ref<InstanceType<typeof MobileHandwritingAi>>()
+async function openHandwriting(node?:CanvasNode){
+  if(!model||props.readOnly||composing.value||invalidFields.value.size)return;cancel();node=node??activeNode.value
+  const source=model.source
+  if(node?.type==='file'&&/\.md$/i.test(node.file??'')){
+    try{const doc=await mobileRequest<NoteDocument>({kind:'read_path',path:node.file!});if(disposed||props.readOnly||model?.source!==source)return;if(doc.content.length>32000)throw Error('HANDWRITING_NOTE_TOO_LARGE');handwriting.value={source,ink:emptyHandwriting('text'),text:doc.content}}catch{localError.value=copy.value.invalidValue}
+    return
+  }
+  const text=node?.type==='text'?node.text??'':''
+  handwriting.value={id:node?.type==='text'?node.id:undefined,source,ink:handwritingOf(node)??emptyHandwriting(text?'text':'ink'),text}
+}
+function applyHandwriting(proposal:HandwritingProposal){const state=handwriting.value;if(!model||!gestures||!state)return;let result:ReturnType<typeof applyHandwritingProposal>|undefined;guarded(()=>{const point=gestures!.world({x:dimensions.value.width/2-240,y:dimensions.value.height/2-180});result=applyHandwritingProposal(model!,state.source,state.id,point,proposal)});if(!result)return;handwriting.value=undefined;selected.value=result.id?[result.id]:[];if(result.markdown)emit('markdown',result.markdown)}
 const scene = ref<InstanceType<typeof CanvasScene>>()
 const host = computed(() => scene.value?.element), revision = ref(0), selected = ref<string[]>([]), edgeId = ref('')
 const multi = ref(false), connecting = ref(false), connectFrom = ref(''), panel = ref(false), localError = ref('')
@@ -160,6 +177,7 @@ onBeforeUnmount(() => { disposed = true; cancel(); imageCache.dispose(); resizeO
 defineExpose({ undo, redo, cancel, source: () => model?.source ?? props.modelValue,
   handleBack() {
     if (composing.value || invalidFields.value.size) return true
+    if (handwriting.value) { handwritingPanel.value?.close(); return true }
     if (gestures?.pointers.size) { cancel(); return true }
     if (addType.value) { addType.value = null; return true }
     if (toolsMenu.value?.closeMenu()) return true
@@ -181,14 +199,15 @@ defineExpose({ undo, redo, cancel, source: () => model?.source ?? props.modelVal
     </template>
     <template v-else>
       <CanvasToolbar ref="toolsMenu" :language="language" touch :read-only="Boolean(readOnly || composing)" :selection-count="selected.length" :edge-selected="Boolean(edgeId)" :can-undo="Boolean(model?.canUndo)" :can-redo="Boolean(model?.canRedo)" :node-count="nodes.length" :sidebar="panel" :show-inspector="false" :arrange-enabled="false"
-        @add-text="add('text',copy.textName)" @add-file="addReference('file')" @add-link="addReference('link')" @group="add('group',copy.groupName)" @connect="guarded(()=>model!.connect(selected[0]!,selected[1]!))" @undo="undo" @redo="redo" @copy="copySelection" @paste="paste" @remove="remove">
+        @add-handwriting="openHandwriting()" @add-text="add('text',copy.textName)" @add-file="addReference('file')" @add-link="addReference('link')" @group="add('group',copy.groupName)" @connect="guarded(()=>model!.connect(selected[0]!,selected[1]!))" @undo="undo" @redo="redo" @copy="copySelection" @paste="paste" @remove="remove">
         <template #selection><button class="button-secondary" :disabled="readOnly || composing" :aria-pressed="multi" @click="cancel();multi=!multi;connecting=false">{{ copy.select }}</button><button class="button-secondary" :disabled="readOnly || composing" :aria-pressed="connecting" @click="cancel();connecting=!connecting;connectFrom='';multi=false">{{ copy.connect }}</button><button class="button-secondary" :disabled="!hasSelection || composing" @click="property">{{ copy.properties }}</button><button class="button-secondary" @click="fit">{{ copy.fit }}</button></template>
         <template #tools><button role="menuitem" :disabled="readOnly || composing" @click="cancel();emit('image')">{{ copy.importImage }}</button><button role="menuitem" :disabled="readOnly || composing || !selected.length" @click="duplicate">{{ copy.duplicate }}</button></template>
       </CanvasToolbar>
       <p class="canvas-hint" role="status">{{ connecting ? copy.connectHelp : copy.hint }} <span v-if="hasSelection">{{ copy.selected }}: {{ selected.length || 1 }}</span></p>
       <p v-if="feedback" role="alert">{{ feedback }} <button v-if="invalidFields.size" class="quiet" @click="discardFields">{{ copy.discardFields }}</button></p>
       <CanvasScene ref="scene" :nodes="visibleNodes" :node-count="nodes.length" :edges="edges" :order="sceneOrder" :pan="{x:view.x,y:view.y}" :zoom="view.zoom" :selected="selected" :selected-edge="edgeId" :previews="scenePreviews" :read-only="Boolean(readOnly)" :label="copy.canvas" :empty-label="copy.empty" touch
-        @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @lostpointercapture="lost" @node-pointer="down" @resize-pointer="down" @edge-pointer="down" @locate="keyboardSelect" @open="requestOpen" @select-edge="selectEdge" @image-error="imageError" />
+        @edit-handwriting="openHandwriting" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @lostpointercapture="lost" @node-pointer="down" @resize-pointer="down" @edge-pointer="down" @locate="keyboardSelect" @open="requestOpen" @select-edge="selectEdge" @image-error="imageError" />
+      <MobileHandwritingAi v-if="handwriting" ref="handwritingPanel" :ink="handwriting.ink" :text="handwriting.text" :language="language" :read-only="readOnly || composing" @close="handwriting=undefined" @apply="applyHandwriting"/>
       <CanvasInspector v-if="panel" class="canvas-properties" :nodes="nodes" :edges="model?.document.edges ?? []" :selected="selected" :blocked="composing || Boolean(invalidFields.size)" :language="language" touch @close="panel=false" @locate="locateNode" @select-edge="selectEdge">
         <template #hint>{{ copy.hint }}</template>
         <CanvasProperties :node="activeNode" :edge="activeEdge" :node-values="nodePropertyValues" :edge-values="edgePropertyValues" :selection-count="selected.length" :read-only="Boolean(readOnly)" :language="language" touch immediate @node-input="propertyInput" @edge-input="(key,event)=>propertyInput(key,event,true)" @composition-start="startComposition" @node-composition-end="propertyEnd" @edge-composition-end="(key,event)=>propertyEnd(key,event,true)">

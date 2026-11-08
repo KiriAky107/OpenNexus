@@ -15,6 +15,7 @@ class PermissionMode(str, Enum):
 KNOWN_PERMISSIONS = frozenset(
     {
         "notes.read",
+        "canvas.write",
         "notes.search",
         "notes.write",
         "notes.delete",
@@ -38,7 +39,7 @@ KNOWN_PERMISSIONS = frozenset(
 # A session or policy grant never substitutes for review of another write,
 # execution, or import. Read grants remain scoped to the current Agent run.
 ONCE_ONLY_PERMISSIONS = frozenset({
-    "experiments.files.write", "experiments.run", "experiments.import",
+    "canvas.write", "experiments.files.write", "experiments.run", "experiments.import",
 })
 
 
@@ -46,6 +47,7 @@ class PermissionPolicy:
     def __init__(self) -> None:
         self._rules: dict[str, PermissionMode] = {
             "notes.read": PermissionMode.allow,
+            "canvas.write": PermissionMode.confirm,
             "notes.search": PermissionMode.allow,
             "notes.delete": PermissionMode.confirm,
             "notes.write": PermissionMode.confirm,

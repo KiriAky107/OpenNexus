@@ -29,6 +29,7 @@ pub mod experiment_outputs;
 pub mod experiment_owner;
 pub mod experiment_preview;
 pub mod experiment_store;
+pub mod handwriting;
 pub mod mobile_drafts;
 pub mod mobile_export;
 #[cfg(feature = "sync-http")]
@@ -40,6 +41,8 @@ pub mod mobile_sync_foreground;
 #[cfg(feature = "sync-http")]
 pub mod mobile_sync_session;
 pub mod mobile_workspace;
+#[cfg(feature = "sync-http")]
+pub mod native_ai;
 mod payloads;
 mod preference_records;
 pub mod recent;

@@ -13,6 +13,7 @@ export interface MobileCapabilities {
   external_links?: boolean
   navigation?: boolean
   appearance?: boolean
+  handwriting_ai?: boolean
   core: boolean
   sync: boolean
   credentials: boolean

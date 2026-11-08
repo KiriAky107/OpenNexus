@@ -419,8 +419,8 @@ class RuntimeBoundaries(unittest.TestCase):
             self.assertEqual(calls,expected);self.assertIsNone(probe.original_ime)
 
     def test_runtime_reuse_requires_the_exact_successful_build_job_not_an_aggregate_green_run(self):
-        run={'id':42,'head_sha':'fixed-source','head_branch':'main','path':'.github/workflows/android.yml','conclusion':'failure'}
-        job={'id':99,'name':'debug-apk','status':'completed','conclusion':'success'}
+        run={'id':42,'head_sha':'fixed-source','head_branch':'main','path':'.github/workflows/android.yml','conclusion':'failure','run_attempt':1}
+        job={'id':99,'name':'debug-apk','status':'completed','conclusion':'success','run_id':42,'head_sha':'fixed-source','run_attempt':1}
         # A subsequent runner failure does not invalidate an already verified APK.
         self.assertEqual(validate_build_job(run,[job],'fixed-source')['job_id'],99)
         with self.assertRaisesRegex(RuntimeError,'source mismatch'):validate_build_job(run,[job],'other-source')

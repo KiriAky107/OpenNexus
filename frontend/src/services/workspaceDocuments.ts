@@ -1,3 +1,4 @@
+import { INK_KEY, validHandwriting } from '../features/editor/handwriting'
 export type WorkspaceDocumentType = 'markdown' | 'canvas' | 'image' | 'experiment' | 'unsupported'
 
 export function isExperimentWorkspacePath(path: string): boolean {
@@ -45,6 +46,7 @@ export function validateCanvasContent(content: string): void {
     if (typeof node.id !== 'string' || !node.id || node.id.length > 128 || ids.has(node.id)
       || !bounded(node.x, -1_000_000, 1_000_000) || !bounded(node.y, -1_000_000, 1_000_000)
       || !bounded(node.width, 1, 100_000) || !bounded(node.height, 1, 100_000)) throw new Error('CANVAS_INVALID')
+    if (node[INK_KEY] !== undefined && (node.type !== 'text' || !validHandwriting(node[INK_KEY]))) throw new Error('CANVAS_HANDWRITING_INVALID')
     ids.add(node.id)
     if (!optional(node, 'color', color)
       || !optional(node, 'subpath', value => typeof value === 'string' && value.startsWith('#'))

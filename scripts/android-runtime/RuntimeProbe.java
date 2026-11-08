@@ -351,6 +351,34 @@ public final class RuntimeProbe extends Instrumentation {
         return string(node.getPackageName()).endsWith(".documentsui");
     }
 
+    private boolean photoPicker(AccessibilityNodeInfo node) {
+        // Exact module observed on this owned API36 Google system image.
+        return "com.google.android.photopicker".equals(string(node.getPackageName()));
+    }
+
+    private boolean downloadsRoot(AccessibilityNodeInfo node) {
+        if (!documentsUi(node) || !label(node, "Downloads", false)
+            || !"android:id/title".equals(string(node.getViewIdResourceName()))) return false;
+        for (int depth = 0; node != null && depth < 8; depth++, node = node.getParent()) {
+            if (documentsUi(node) && (string(node.getPackageName()) + ":id/roots_list")
+                .equals(string(node.getViewIdResourceName()))) return true;
+        }
+        return false;
+    }
+
+    private void waitPickerRootsClosed() {
+        long until = SystemClock.uptimeMillis() + 5000;
+        do {
+            boolean visible = false;
+            for (AccessibilityNodeInfo node : nodes())
+                visible |= documentsUi(node) && node.isVisibleToUser()
+                    && (string(node.getPackageName()) + ":id/roots_list").equals(string(node.getViewIdResourceName()));
+            if (!visible) return;
+            SystemClock.sleep(50);
+        } while (SystemClock.uptimeMillis() < until);
+        throw new IllegalStateException("System picker roots remain open; no file tap sent");
+    }
+
     private void waitOriginalImageNode() {
         waitNode(node -> string(node.getText()).contains("attachments/")
             || string(node.getContentDescription()).contains("attachments/"), "original image node");
@@ -392,10 +420,22 @@ public final class RuntimeProbe extends Instrumentation {
     private void chooseOriginalImage() {
         // Wry uses FileChooserParams.createIntent(); select the owned original in
         // Android's real DocumentsUI instead of injecting a URI into the WebView.
+        // API36 may first open PhotoPicker; use its system Browse navigation.
+        AccessibilityNodeInfo picker = waitNode(node -> documentsUi(node)
+            || (photoPicker(node) && label(node, "More", false)), "system image picker");
+        if (photoPicker(picker)) {
+            activate(picker, this::photoPicker);
+            activate(waitNode(node -> photoPicker(node) && (label(node, "Browse", false)
+                || label(node, "Browse...", false) || label(node, "Browse…", false)),
+                "system picker Browse action"), this::photoPicker);
+        }
         waitNode(this::documentsUi, "system document picker");
         activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
-        activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
-        activate(waitNode(node -> documentsUi(node) && label(node, "opennexus-ci-original.png", false), "owned original PNG"));
+        activate(waitNode(this::downloadsRoot, "owned Downloads root item"), this::downloadsRoot);
+        waitPickerRootsClosed();
+        activate(waitNode(node -> documentsUi(node) && (label(node, "opennexus-ci-original.png", false)
+            || ("android.widget.LinearLayout".equals(string(node.getClassName()))
+                && string(node.getContentDescription()).startsWith("opennexus-ci-original.png, "))), "owned original PNG"));
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
     }
 
@@ -564,12 +604,10 @@ public final class RuntimeProbe extends Instrumentation {
         require(APP.equals(string(observed.getPackageName())) && observed.isEditable()
             && label(observed, "Markdown note body", false) && observed.isVisibleToUser(),
             "Refusing focus outside the observed owned Markdown body");
-        // Empty rich contenteditable nodes can leave the AX tree while idle.
-        // Focus the freshly observed named editor before checking stable tap
-        // bounds. No text is sent here; exact role and InputConnection ownership
-        // are still required by the following actions.
-        require(observed.isFocused() || observed.performAction(AccessibilityNodeInfo.ACTION_FOCUS),
-            "Owned named editor refused input focus; no text sent");
+        // WebView can refuse programmatic AX focus on an empty rich editor.
+        // Let the one real tap request focus; inputText still admits only the
+        // original app's InputConnection before sending any text. A refused AX
+        // action is not evidence that a physical tap failed.
         // The requested semantic name is known by the caller. Do not infer it
         // from a soon-to-be-replaced virtual node or retain its resource id.
         progress.append("tap target: owned Markdown note body editable role\n");
@@ -631,9 +669,20 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void touch(long start, long when, int action, float x, float y) {
-        MotionEvent event = MotionEvent.obtain(start, when, action, x, y, 0);
-        event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        try { require(ui.injectInputEvent(event, true), "Touch injection rejected"); } finally { event.recycle(); }
+        MotionEvent.PointerProperties pointer = new MotionEvent.PointerProperties();
+        pointer.id = 0; pointer.toolType = MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
+        coords.x = x; coords.y = y; coords.size = 1;
+        coords.pressure = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ? 0 : 1;
+        MotionEvent event = MotionEvent.obtain(start, when, action, 1,
+            new MotionEvent.PointerProperties[] {pointer}, new MotionEvent.PointerCoords[] {coords},
+            0, 0, 1, 1, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
+        try {
+            require(event.getPointerCount() == 1 && event.getPointerId(0) == 0
+                && event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+                && event.getSource() == InputDevice.SOURCE_TOUCHSCREEN, "Unexpected injected finger event shape");
+            require(ui.injectInputEvent(event, true), "Touch injection rejected");
+        } finally { event.recycle(); }
     }
 
     private boolean keyboardVisible() {

@@ -5,12 +5,14 @@ import { nodeLabel, type CanvasNode } from './canvasModel'
 import type { GeometryItem } from './canvasGeometry'
 import { workspaceDocumentType } from '@/services/workspaceDocuments'
 import { t } from '@/i18n'
+import HandwritingView from './HandwritingView.vue'
+import { handwritingOf } from './handwriting'
 const props = defineProps<{
   nodes: CanvasNode[]; nodeCount: number; edges: GeometryItem[]; order: ReadonlyMap<string, number>;
   pan: { x: number; y: number }; zoom: number; selected: string[]; selectedEdge: string;
   previews: Record<string, { text?: string; url?: string }>; readOnly: boolean; label: string; emptyLabel: string; touch?: boolean
 }>()
-const emit = defineEmits<{ nodePointer: [event: PointerEvent, node: CanvasNode]; resizePointer: [event: PointerEvent, node: CanvasNode]; edgePointer: [event: PointerEvent]; locate: [id: string]; open: [node: CanvasNode]; selectEdge: [id: string]; imageError: [path: string] }>()
+const emit = defineEmits<{ nodePointer: [event: PointerEvent, node: CanvasNode]; resizePointer: [event: PointerEvent, node: CanvasNode]; edgePointer: [event: PointerEvent]; locate: [id: string]; open: [node: CanvasNode]; editHandwriting: [node: CanvasNode]; selectEdge: [id: string]; imageError: [path: string] }>()
 const element = ref<HTMLElement>()
 const selectedSet = computed(() => new Set(props.selected))
 const imagePath = (node: CanvasNode) => node.type === 'group' ? node.background : node.file
@@ -31,8 +33,8 @@ defineExpose({ get element() { return element.value } })
             </g>
           </svg>
           <div v-for="node in nodes" :key="node.id" v-memo="[node,selectedSet.has(node.id),previews[imagePath(node)??''],readOnly,t('文字','Text')]" class="canvas-node" :class="[node.type,{selected:selectedSet.has(node.id)}]" :data-node-id="node.id" :data-node="node.id" tabindex="0" role="group" :aria-label="`${node.type}: ${node.type==='file'?node.file:nodeLabel(node)}`" :style="{left:`${node.x}px`,top:`${node.y}px`,width:`${node.width}px`,height:`${node.height}px`,borderColor:color(node.color),zIndex:(order.get(node.id)??0)+1}" @pointerdown.stop="emit('nodePointer', $event, node)" @keydown.enter.self.prevent.stop="emit('locate', node.id)">
-            <header><span>{{ node.type==='text'?t('文字','Text'):node.type==='file'?t('文件','File'):node.type==='link'?t('网址','URL'):node.label??t('分组','Group') }}</span><button v-if="node.type==='file'&&['markdown','canvas'].includes(workspaceDocumentType(node.file??''))||node.type==='link'" class="node-open" :aria-label="t('打开节点目标','Open node target')" @pointerdown.stop @click.stop="emit('open', node)">↗</button></header>
-            <div class="canvas-node-content"><template v-if="node.type==='text'">{{ node.text }}</template><template v-else-if="node.type==='link'"><strong>{{ node.url }}</strong><p>{{ t('选择打开时会使用浏览器。','Opens in your browser when selected.') }}</p></template><template v-else-if="node.type==='file'"><strong :title="node.file">{{ nodeLabel(node) }}</strong><img v-if="previews[node.file??'']?.url" :src="previews[node.file??'']!.url" :alt="node.file??''" draggable="false" @error="emit('imageError', node.file!)"/><p v-else>{{ previews[node.file??'']?.text??t('读取引用内容…','Loading referenced content…') }}</p></template><div v-else-if="node.background&&previews[node.background]?.url" class="canvas-group-background" role="img" :aria-label="node.label??node.background" :style="groupBackground(node)"/></div>
+            <header><button v-if="handwritingOf(node)" class="node-open" :aria-label="t('编辑手写','Edit handwriting')" @pointerdown.stop @click.stop="emit('editHandwriting',node)">✎</button><span>{{ node.type==='text'?t('文字','Text'):node.type==='file'?t('文件','File'):node.type==='link'?t('网址','URL'):node.label??t('分组','Group') }}</span><button v-if="node.type==='file'&&['markdown','canvas'].includes(workspaceDocumentType(node.file??''))||node.type==='link'" class="node-open" :aria-label="t('打开节点目标','Open node target')" @pointerdown.stop @click.stop="emit('open', node)">↗</button></header>
+            <div class="canvas-node-content" :class="{'ink-content':handwritingOf(node)}"><HandwritingView v-if="handwritingOf(node)" :ink="handwritingOf(node)!" :text="node.text??''"/><template v-else-if="node.type==='text'">{{ node.text }}</template><template v-else-if="node.type==='link'"><strong>{{ node.url }}</strong><p>{{ t('选择打开时会使用浏览器。','Opens in your browser when selected.') }}</p></template><template v-else-if="node.type==='file'"><strong :title="node.file">{{ nodeLabel(node) }}</strong><img v-if="previews[node.file??'']?.url" :src="previews[node.file??'']!.url" :alt="node.file??''" draggable="false" @error="emit('imageError', node.file!)"/><p v-else>{{ previews[node.file??'']?.text??t('读取引用内容…','Loading referenced content…') }}</p></template><div v-else-if="node.background&&previews[node.background]?.url" class="canvas-group-background" role="img" :aria-label="node.label??node.background" :style="groupBackground(node)"/></div>
             <button v-if="selectedSet.has(node.id)&&!readOnly" class="node-resize" :aria-label="t('调整节点尺寸','Resize node')" data-resize="true" @pointerdown.stop="emit('resizePointer', $event, node)">↘</button>
           </div>
         </div>
@@ -42,7 +44,7 @@ defineExpose({ get element() { return element.value } })
 </template>
 
 <style scoped>
-.canvas-group-background{position:absolute;inset:0;z-index:-1;pointer-events:none}
+.canvas-node-content.ink-content{padding:0}.canvas-group-background{position:absolute;inset:0;z-index:-1;pointer-events:none}
 .canvas-viewport{position:relative;flex:1;overflow:hidden;min-height:200px;min-width:0;touch-action:none;background-color:var(--color-background-secondary);background-image:radial-gradient(var(--color-border-default) 1px,transparent 1px);background-size:20px 20px;user-select:none}
 .canvas-world{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:none}
 .canvas-edges{position:absolute;overflow:visible;pointer-events:none}

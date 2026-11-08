@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import CanvasScene from './CanvasScene.vue'
+import CanvasHandwritingAi from './CanvasHandwritingAi.vue'
+import { applyHandwritingProposal, type HandwritingProposal } from './handwritingActions'
+import { emptyHandwriting, handwritingOf, type Handwriting } from './handwriting'
 import CanvasInspector from './CanvasInspector.vue'
 import CanvasProperties from './CanvasProperties.vue'
 import CanvasToolbar from './CanvasToolbar.vue'
@@ -13,7 +16,7 @@ import { CanvasGeometry,intersects } from './canvasGeometry'
 import { CanvasPreviewCache } from './canvasPreviewCache'
 import { contentHash,isDesktop } from '@/services/platform/desktop'
 import { documentPaths } from '@/services/referenceImpact'
-import { loadWorkspaceImage,readFileContent } from '@/services/workspaceService'
+import { createFile,loadWorkspaceImage,readFileContent } from '@/services/workspaceService'
 import { resolveCanvasFile,workspaceDocumentType } from '@/services/workspaceDocuments'
 import { navigateMarkdownHref } from '@/services/markdownLinkService'
 import { folderNoteSummary } from '@/features/workspace/folderSummary'
@@ -36,6 +39,28 @@ const graph=computed(()=>new CanvasGeometry(document.value)),selectedSet=compute
 const picked=computed(()=>graph.value.nodes.get(selected.value[0]??'')),edge=computed(()=>graph.value.edges.get(selectedEdge.value))
 const draft=ref({value:'',x:0,y:0,width:300,height:180,color:'',subpath:''}),edgeDraft=ref({label:'',fromSide:'right' as CanvasSide,toSide:'left' as CanvasSide,fromEnd:'none' as 'none'|'arrow',toEnd:'arrow' as 'none'|'arrow'})
 const creating=ref<'file'|'link'|null>(null),newValue=ref('')
+const handwriting=ref<{id?:string;source:string;ink:Handwriting;text:string}>()
+async function openHandwriting(node?:CanvasNode){
+  if(readOnly.value)return;cancelGesture();node=node??picked.value
+  const source=model.source
+  if(node?.type==='file'&&workspaceDocumentType(node.file??'')==='markdown'){
+    try{const text=await readFileContent('/'+node.file);if(disposed||readOnly.value||model.source!==source)return;if(text.length>32000)throw Error(t('笔记过长，请先选择其中一部分。','The note is too long. Select a section first.'));handwriting.value={source,ink:emptyHandwriting('text'),text}}catch(cause){error.value=String(cause)}
+    return
+  }
+  const text=node?.type==='text'?node.text??'':''
+  handwriting.value={id:node?.type==='text'?node.id:undefined,source,ink:handwritingOf(node)??emptyHandwriting(text?'text':'ink'),text}
+}
+function applyHandwriting(proposal:HandwritingProposal){
+  const state=handwriting.value;if(!state||readOnly.value)return
+  let result:ReturnType<typeof applyHandwritingProposal>|undefined
+  change(()=>{result=applyHandwritingProposal(model,state.source,state.id,centerPoint(),proposal)})
+  if(!result)return
+  handwriting.value=undefined;if(result.id)select(result.id)
+  if(result.markdown)prepareHandwritingMarkdown(result.markdown)
+}
+const handwritingMarkdown=ref(''),handwritingPath=ref('')
+function prepareHandwritingMarkdown(text:string){handwritingMarkdown.value=text;handwritingPath.value='Handwriting-'+new Date().toISOString().slice(0,10)+'.md'}
+async function saveHandwritingMarkdown(){if(!handwritingMarkdown.value||readOnly.value)return;const text=handwritingMarkdown.value,path=handwritingPath.value;try{const slash=path.lastIndexOf('/');await createFile(slash<0?'':path.slice(0,slash),path.slice(slash+1),text);handwritingMarkdown.value='';await workspace.refreshFileTree()}catch(cause){error.value=String(cause)}}
 const paths=computed(()=>documentPaths(workspace.fileTree)),fileOptions=computed(()=>paths.value.filter(path=>['markdown','canvas','image'].includes(workspaceDocumentType(path))))
 let disposed=false,space=false,clipboard='',resizeObserver:ResizeObserver|undefined,disposeCommands:(()=>void)|undefined,previewGeneration=0
 const previews=ref<Record<string,{text?:string;url?:string}>>({}),previewCache=new CanvasPreviewCache()
@@ -207,19 +232,21 @@ onBeforeUnmount(()=>{disposed=true;previewGeneration++;cancelGesture();resizeObs
 <template>
   <div class="canvas-visual" @keydown="keydown" @keyup.space="space=false" @copy="onCopy" @paste="onPaste">
     <CanvasToolbar :read-only="readOnly" :selection-count="selected.length" :edge-selected="Boolean(selectedEdge)" :can-undo="canUndo" :can-redo="canRedo" :node-count="document.nodes.length" :sidebar="sidebar"
-      @add-text="add('text',t('新文字','New text'))" @add-file="beginAdd('file')" @add-link="beginAdd('link')" @group="selected.length?group():add('group',t('分组','Group'))" @connect="connect" @undo="change(()=>model.undo())" @redo="change(()=>model.redo())" @copy="copy" @paste="paste()" @remove="remove" @arrange="change(()=>model.mindMap(selected[0]))&&fit()" @toggle-inspector="sidebar=!sidebar"><template #tools><slot name="tools" /></template></CanvasToolbar>
+      @add-handwriting="openHandwriting()" @add-text="add('text',t('新文字','New text'))" @add-file="beginAdd('file')" @add-link="beginAdd('link')" @group="selected.length?group():add('group',t('分组','Group'))" @connect="connect" @undo="change(()=>model.undo())" @redo="change(()=>model.redo())" @copy="copy" @paste="paste()" @remove="remove" @arrange="change(()=>model.mindMap(selected[0]))&&fit()" @toggle-inspector="sidebar=!sidebar"><template #tools><slot name="tools" /></template></CanvasToolbar>
     <p v-if="navigationError || error" class="error-banner canvas-error" role="alert">{{ navigationError || error }}</p>
     <div class="canvas-body">
       <CanvasScene ref="scene" :nodes="visibleNodes" :node-count="document.nodes.length" :edges="edges" :order="graph.order" :pan="pan" :zoom="zoom" :selected="selected" :selected-edge="selectedEdge" :previews="previews" :read-only="readOnly"
         :label="t('可编辑画布：Shift 多选，空格拖动平移，方向键移动节点，Home 显示全部','Editable canvas: Shift selects multiple nodes, Space-drag pans, arrow keys move nodes, Home fits all')" :empty-label="t('添加文字、笔记、图片或网址开始构建画布。','Add text, notes, images or URLs to start your canvas.')"
         @pointerdown.self="begin($event)" @pointermove="move" @pointerup="end" @pointercancel="cancelGesture" @wheel="wheel" @contextmenu.prevent @blur="space=false"
-        @node-pointer="(event,node)=>begin(event,node)" @resize-pointer="(event,node)=>begin(event,node,true)" @locate="locate" @open="open" @select-edge="id=>{selectedEdge=id;selected=[]}">
+        @edit-handwriting="openHandwriting" @node-pointer="(event,node)=>begin(event,node)" @resize-pointer="(event,node)=>begin(event,node,true)" @locate="locate" @open="open" @select-edge="id=>{selectedEdge=id;selected=[]}">
         <div v-if="box" class="canvas-selection-box" :style="{left:`${box.x}px`,top:`${box.y}px`,width:`${box.width}px`,height:`${box.height}px`}" />
       </CanvasScene>
       <CanvasInspector v-if="sidebar" :nodes="document.nodes" :edges="document.edges" :selected="selected" @close="sidebar=false" @locate="locate" @select-edge="id=>{selectedEdge=id;selected=[]}">
         <CanvasProperties :node="picked" :edge="edge" :node-values="draft" :edge-values="edgeDraft" :selection-count="selected.length" :read-only="readOnly" @node-input="(key,event)=>propertyInput(key,event)" @node-composition-end="(key,event)=>propertyInput(key,event)" @edge-input="(key,event)=>propertyInput(key,event,true)" @edge-composition-end="(key,event)=>propertyInput(key,event,true)" @apply-node="applyNode" @apply-edge="applyEdge" />
       </CanvasInspector>
     </div>
+    <CanvasHandwritingAi v-if="handwriting" :ink="handwriting.ink" :text="handwriting.text" :language="settings.language" :read-only="readOnly" @close="handwriting=undefined" @apply="applyHandwriting"/>
+    <AppDialog v-if="handwritingMarkdown" :label="t('保存文字笔记','Save text note')" @close="handwritingMarkdown=''"><form class="canvas-create" @submit.prevent="saveHandwritingMarkdown"><label>{{ t('新笔记路径','New note path') }}<input v-model="handwritingPath" class="input" required pattern=".+\.md"/></label><p>{{ t('创建新笔记，原画布保留。','Creates a new note and keeps the canvas.') }}</p><button :disabled="readOnly" class="button-primary">{{ t('保存','Save') }}</button></form></AppDialog>
     <footer class="canvas-status"><span>{{ document.nodes.length }} {{ t('个节点','nodes') }} · {{ document.edges.length }} {{ t('条连接','connections') }} · {{ selected.length }} {{ t('已选择','selected') }}</span><div class="inline-actions"><button class="button-secondary" :aria-label="t('缩小画布','Zoom out canvas')" @click="magnify(1/1.2)">−</button><span>{{ Math.round(zoom*100) }}%</span><button class="button-secondary" :aria-label="t('放大画布','Zoom in canvas')" @click="magnify(1.2)">＋</button><button class="button-secondary" @click="fit()">{{ t('显示全部','Fit all') }}</button></div></footer>
     <AppDialog v-if="creating" :label="creating==='file'?t('添加知识库文件','Add vault file'):t('添加网址','Add URL')" @close="creating=null"><form class="canvas-create" @submit.prevent="confirmAdd"><h2>{{ creating==='file'?t('添加知识库文件','Add vault file'):t('添加网址','Add URL') }}</h2><select v-if="creating==='file'" v-model="newValue" class="select" :aria-label="t('选择知识库文件','Choose vault file')"><option v-for="path in fileOptions" :key="path" :value="path.slice(1)">{{ path }}</option></select><input v-else v-model="newValue" class="input" type="url" required :aria-label="t('节点网址','Node URL')"/><p v-if="error" class="error-banner" role="alert">{{ error }}</p><div class="inline-actions"><button class="button-primary" :disabled="!newValue||readOnly">{{ t('添加节点','Add node') }}</button><button type="button" class="button-secondary" @click="creating=null">{{ t('取消','Cancel') }}</button></div></form></AppDialog>
   </div>
