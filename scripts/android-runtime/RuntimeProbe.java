@@ -351,6 +351,11 @@ public final class RuntimeProbe extends Instrumentation {
         return string(node.getPackageName()).endsWith(".documentsui");
     }
 
+    private boolean photoPicker(AccessibilityNodeInfo node) {
+        // Exact module observed on this owned API36 Google system image.
+        return "com.google.android.photopicker".equals(string(node.getPackageName()));
+    }
+
     private void waitOriginalImageNode() {
         waitNode(node -> string(node.getText()).contains("attachments/")
             || string(node.getContentDescription()).contains("attachments/"), "original image node");
@@ -392,6 +397,15 @@ public final class RuntimeProbe extends Instrumentation {
     private void chooseOriginalImage() {
         // Wry uses FileChooserParams.createIntent(); select the owned original in
         // Android's real DocumentsUI instead of injecting a URI into the WebView.
+        // API36 may first open PhotoPicker; use its system Browse navigation.
+        AccessibilityNodeInfo picker = waitNode(node -> documentsUi(node)
+            || (photoPicker(node) && label(node, "More", false)), "system image picker");
+        if (photoPicker(picker)) {
+            activate(picker, this::photoPicker);
+            activate(waitNode(node -> photoPicker(node) && (label(node, "Browse", false)
+                || label(node, "Browse...", false) || label(node, "Browse…", false)),
+                "system picker Browse action"), this::photoPicker);
+        }
         waitNode(this::documentsUi, "system document picker");
         activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
         activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
