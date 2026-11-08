@@ -645,9 +645,20 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void touch(long start, long when, int action, float x, float y) {
-        MotionEvent event = MotionEvent.obtain(start, when, action, x, y, 0);
-        event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        try { require(ui.injectInputEvent(event, true), "Touch injection rejected"); } finally { event.recycle(); }
+        MotionEvent.PointerProperties pointer = new MotionEvent.PointerProperties();
+        pointer.id = 0; pointer.toolType = MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
+        coords.x = x; coords.y = y; coords.size = 1;
+        coords.pressure = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ? 0 : 1;
+        MotionEvent event = MotionEvent.obtain(start, when, action, 1,
+            new MotionEvent.PointerProperties[] {pointer}, new MotionEvent.PointerCoords[] {coords},
+            0, 0, 1, 1, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
+        try {
+            require(event.getPointerCount() == 1 && event.getPointerId(0) == 0
+                && event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+                && event.getSource() == InputDevice.SOURCE_TOUCHSCREEN, "Unexpected injected finger event shape");
+            require(ui.injectInputEvent(event, true), "Touch injection rejected");
+        } finally { event.recycle(); }
     }
 
     private boolean keyboardVisible() {
