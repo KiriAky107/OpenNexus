@@ -99,9 +99,10 @@ def validate_binding(bundle, commit):
     return apk, proof
 
 
-def validate_build_job(run, jobs, commit, compiled=None):
+def validate_build_job(run, jobs, commit, compiled=None, main_ref=None):
     require(run.get('path') == '.github/workflows/android.yml', 'APK build run source mismatch')
     parents = None
+    base_verification = None
     if run.get('head_sha') != commit:
         # PR runs report the branch head, while GITHUB_SHA compiles its merge commit.
         # Accept that source only through the immutable commit's exact ordered parents.
@@ -121,8 +122,22 @@ def validate_build_job(run, jobs, commit, compiled=None):
         parents = compiled.get('parents')
         require(isinstance(parents, list) and len(parents) == 2
             and all(isinstance(parent, dict) for parent in parents)
-            and [parent.get('sha') for parent in parents] == [base['sha'], head['sha']],
+            and parents[0].get('sha') != head['sha']
+            and parents[1].get('sha') == head['sha'],
             'APK build run source mismatch')
+        if parents[0].get('sha') == base['sha']:
+            base_verification = 'reported_pr_base'
+        else:
+            # The run API can retain the PR's creation base after main advances.
+            # Do not accept arbitrary first parents: independently read main once.
+            require(base.get('ref') == 'main' and isinstance(main_ref, dict)
+                and main_ref.get('ref') == 'refs/heads/main'
+                and isinstance(main_ref.get('object'), dict)
+                and main_ref['object'].get('type') == 'commit'
+                and isinstance(parents[0].get('sha'), str)
+                and re.fullmatch(r'[0-9a-f]{40}', parents[0]['sha'])
+                and main_ref['object'].get('sha') == parents[0]['sha'], 'APK build run source mismatch')
+            base_verification = 'observed_main_ref'
     builds = [job for job in jobs if job.get('name') == 'debug-apk']
     require(len(builds) == 1 and builds[0].get('status') == 'completed'
         and builds[0].get('conclusion') == 'success'
@@ -133,6 +148,7 @@ def validate_build_job(run, jobs, commit, compiled=None):
     return {'run_id': run['id'], 'job_id': builds[0]['id'], 'head_sha': run['head_sha'],
         'head_branch': run['head_branch'], 'source_commit': commit,
         'source_kind': 'pull_request_merge' if parents is not None else 'head',
+        'merge_base_verification': base_verification,
         'merge_parents': [parent['sha'] for parent in parents] if parents is not None else None}
 
 
@@ -157,7 +173,15 @@ def build_job_origin(run_id, commit):
     run, jobs = read(base), read(base + '/jobs?per_page=100')['jobs']
     compiled = read(f'/repos/{repository}/git/commits/{commit}') if (
         run.get('event') == 'pull_request' and run.get('head_sha') != commit) else None
-    return validate_build_job(run, jobs, commit, compiled)
+    main_ref = None
+    if isinstance(compiled, dict):
+        prs, parents = run.get('pull_requests'), compiled.get('parents')
+        if (isinstance(prs, list) and len(prs) == 1 and isinstance(prs[0], dict)
+                and isinstance(prs[0].get('base'), dict) and prs[0]['base'].get('ref') == 'main'
+                and isinstance(parents, list) and len(parents) == 2 and isinstance(parents[0], dict)
+                and parents[0].get('sha') != prs[0]['base'].get('sha')):
+            main_ref = read(f'/repos/{repository}/git/ref/heads/main')
+    return validate_build_job(run, jobs, commit, compiled, main_ref)
 
 
 def require_hosted_emulator(serial):

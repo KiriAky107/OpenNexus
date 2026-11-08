@@ -26,6 +26,7 @@ class RuntimeBuildOrigin(unittest.TestCase):
         self.assertEqual(result['head_sha'], run['head_sha'])
         self.assertEqual(result['source_commit'], merge)
         self.assertEqual(result['source_kind'], 'pull_request_merge')
+        self.assertEqual(result['merge_base_verification'], 'reported_pr_base')
         self.assertEqual(result['merge_parents'], ['b' * 40, 'a' * 40])
         self.assertEqual(result['job_id'], 99)
 
@@ -59,10 +60,12 @@ class RuntimeBuildOrigin(unittest.TestCase):
             with self.subTest(key=key, value=value), self.assertRaisesRegex(RuntimeError, 'no successful terminal'):
                 validate_build_job(run, [{**job, key: value}], merge, compiled)
 
-    def fetch(self, run, job, commit, compiled=None):
+    def fetch(self, run, job, commit, compiled=None, main_ref=None):
         payloads = [run, {'jobs': [job]}]
         if compiled is not None:
             payloads.append(compiled)
+        if main_ref is not None:
+            payloads.append(main_ref)
         connection = Mock()
         connection.getresponse.side_effect = [Mock(status=200,
             read=Mock(return_value=json.dumps(value).encode())) for value in payloads]
@@ -81,6 +84,35 @@ class RuntimeBuildOrigin(unittest.TestCase):
             ('GET', '/repos/owner/repo/actions/runs/42/jobs?per_page=100'),
             ('GET', '/repos/owner/repo/git/commits/' + merge)])
         self.assertEqual(connection.close.call_count, 3)
+
+    def test_advanced_main_requires_the_exact_fresh_canonical_commit_ref(self):
+        run, job, merge, compiled = self.fixture()
+        compiled['parents'][0]['sha'] = 'd' * 40
+        current = {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': 'd' * 40}}
+        result = validate_build_job(run, [job], merge, compiled, current)
+        self.assertEqual(result['merge_base_verification'], 'observed_main_ref')
+        self.assertEqual(result['merge_parents'], ['d' * 40, 'a' * 40])
+        for invalid in (None, {}, {**current, 'ref': 'refs/heads/other'},
+                {**current, 'object': {'type': 'tag', 'sha': 'd' * 40}},
+                {**current, 'object': {'type': 'commit', 'sha': 'e' * 40}}):
+            with self.subTest(ref=invalid), self.assertRaisesRegex(RuntimeError, 'source mismatch'):
+                validate_build_job(run, [job], merge, compiled, invalid)
+        other = copy.deepcopy(run)
+        other['pull_requests'][0]['base']['ref'] = 'release/other'
+        with self.assertRaisesRegex(RuntimeError, 'source mismatch'):
+            validate_build_job(other, [job], merge, compiled, current)
+
+    def test_advanced_main_lookup_is_explicit_once_and_keeps_original_base_distinct(self):
+        run, job, merge, compiled = self.fixture()
+        compiled['parents'][0]['sha'] = 'd' * 40
+        current = {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': 'd' * 40}}
+        result, connection = self.fetch(run, job, merge, compiled, current)
+        self.assertEqual(result['merge_base_verification'], 'observed_main_ref')
+        self.assertEqual(run['pull_requests'][0]['base']['sha'], 'b' * 40)
+        self.assertEqual(connection.request.call_args_list[-1].args[:2],
+            ('GET', '/repos/owner/repo/git/ref/heads/main'))
+        self.assertEqual(connection.request.call_count, 4)
+        self.assertEqual(connection.close.call_count, 4)
 
     def test_direct_head_needs_no_merge_metadata_and_malformed_selection_makes_no_request(self):
         run, job, _, _ = self.fixture()
