@@ -356,6 +356,29 @@ public final class RuntimeProbe extends Instrumentation {
         return "com.google.android.photopicker".equals(string(node.getPackageName()));
     }
 
+    private boolean downloadsRoot(AccessibilityNodeInfo node) {
+        if (!documentsUi(node) || !label(node, "Downloads", false)
+            || !"android:id/title".equals(string(node.getViewIdResourceName()))) return false;
+        for (int depth = 0; node != null && depth < 8; depth++, node = node.getParent()) {
+            if (documentsUi(node) && (string(node.getPackageName()) + ":id/roots_list")
+                .equals(string(node.getViewIdResourceName()))) return true;
+        }
+        return false;
+    }
+
+    private void waitPickerRootsClosed() {
+        long until = SystemClock.uptimeMillis() + 5000;
+        do {
+            boolean visible = false;
+            for (AccessibilityNodeInfo node : nodes())
+                visible |= documentsUi(node) && node.isVisibleToUser()
+                    && (string(node.getPackageName()) + ":id/roots_list").equals(string(node.getViewIdResourceName()));
+            if (!visible) return;
+            SystemClock.sleep(50);
+        } while (SystemClock.uptimeMillis() < until);
+        throw new IllegalStateException("System picker roots remain open; no file tap sent");
+    }
+
     private void waitOriginalImageNode() {
         waitNode(node -> string(node.getText()).contains("attachments/")
             || string(node.getContentDescription()).contains("attachments/"), "original image node");
@@ -408,7 +431,8 @@ public final class RuntimeProbe extends Instrumentation {
         }
         waitNode(this::documentsUi, "system document picker");
         activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
-        activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
+        activate(waitNode(this::downloadsRoot, "owned Downloads root item"), this::downloadsRoot);
+        waitPickerRootsClosed();
         activate(waitNode(node -> documentsUi(node) && (label(node, "opennexus-ci-original.png", false)
             || ("android.widget.LinearLayout".equals(string(node.getClassName()))
                 && string(node.getContentDescription()).startsWith("opennexus-ci-original.png, "))), "owned original PNG"));
