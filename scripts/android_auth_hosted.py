@@ -220,6 +220,11 @@ class HostedOrigin:
                 require(time.monotonic()<deadline,'OWNED_AUTH_TUNNEL_NOT_READY');time.sleep(.5)
         atomic_json(self.root/'device-private.json',{'endpoint':endpoint,'accounts':accounts},exclusive=True)
         self.state.update(result='ready',endpoint=endpoint,cloudflared=asset,bucket=bucket);self.save()
+        if self.fixture=='signed-release-quota32':
+            # Original zero counts precede any consumer's Android login/Setup.
+            # Later admission reads this exclusive historical proof, not PG zero again.
+            from android_release_sync_quota_fixture import verify_prepared
+            verify_prepared(self.root)
         return {'source':SERVICE_SHA,'fixture':self.fixture,'fixture_script_sha256':self.state['fixture_script_sha256'],
             'endpoint':endpoint,'providers':'Owned PostgreSQL17.6/S3 and actual production initialize/create-user CLI',
             'images':[{'requested':item['image'],'resolved_id':item['image_id']} for item in self.state['containers']],
