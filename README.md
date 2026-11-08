@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta10-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta11-5865f2?style=flat-square" alt="Version" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
@@ -34,9 +34,9 @@
 
 ---
 
-Current release: [v0.6.0-beta10](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta10).
+Current release: [v0.6.0-beta11](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta11).
 
-When a chat stream fails, the conversation keeps the partial reply, tool run links and error. Events that arrive afterward cannot rewrite the failed reply or overwrite history you explicitly reload. Sending again remains your choice.
+Local transcription distinguishes system memory or commit limits, worker memory budgets, Windows access violations and other process exits. For insufficient system memory, it asks you to save your work and close unused applications without reloading the model on the CPU. Diagnostics retain the exit code without exposing model paths.
 
 [Sync 0.8.0](https://github.com/KiriAky107/Sync-for-OpenNexus/releases/tag/v0.8.0) adds read-only reclamation plans, device progress, operations diagnostics and a bilingual console; [Community 0.8.0](https://github.com/KiriAky107/Community-for-OpenNexus/releases/tag/v0.8.0) adds grouped catalog browsing, text review, audit and key views, queue filters and a bilingual workbench.
 
@@ -105,10 +105,10 @@ When a chat stream fails, the conversation keeps the partial reply, tool run lin
 
 ### Windows Desktop (Recommended)
 
-1. Download the Windows x64 installer from the [0.6.0-beta10 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta10). For a local build, follow [Packaging](#packaging).
+1. Download the Windows x64 installer from the [0.6.0-beta11 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta11). For a local build, follow [Packaging](#packaging).
 2. *(Optional)* Verify integrity via PowerShell:
 ```powershell
-   Get-FileHash .\OpenNexus_0.6.0-beta10_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.6.0-beta11_x64-setup.exe -Algorithm SHA256
    # Compare with SHA256SUMS.txt from the same release.
 
 ```
@@ -364,7 +364,7 @@ erDiagram
 
 ## Ecosystem Repositories
 
-Companion releases: OpenNexus **0.6.0-beta10**, Sync for OpenNexus **0.8.0**, and Community for OpenNexus **0.8.0**. Sync uses `/sync/v1`; Community uses `/catalog/v1`. Product versions and protocol versions are maintained separately.
+Companion releases: OpenNexus **0.6.0-beta11**, Sync for OpenNexus **0.8.0**, and Community for OpenNexus **0.8.0**. Sync uses `/sync/v1`; Community uses `/catalog/v1`. Product versions and protocol versions are maintained separately.
 
 To keep dependencies clean and packaging predictable, services are maintained in separate repositories:
 
@@ -460,7 +460,7 @@ pnpm desktop:build
 
 ```
 
-The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.6.0-beta10 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta10) also provides a source archive of its fixed release commit and a SHA-256 list.
+The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.6.0-beta11 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta11) also provides a source archive of its fixed release commit and a SHA-256 list.
 
 Windows installers include the architecture-matched, Microsoft-signed `WebView2Loader.dll` beside `OpenNexus.exe`, resolved from the locked WebView2 SDK before bundling. The WebView2 Runtime installer does not supply this app-side DLL. The embedded bootstrapper installs the Runtime if needed and still requires internet access. To check an extracted installer, run `python scripts/verify-windows-loader.py <extracted-installer-directory>`; this checks the Host/Loader architecture and SDK hash, so an SDK installed on the build machine cannot hide a missing DLL.
 
