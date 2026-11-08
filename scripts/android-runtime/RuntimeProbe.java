@@ -564,12 +564,10 @@ public final class RuntimeProbe extends Instrumentation {
         require(APP.equals(string(observed.getPackageName())) && observed.isEditable()
             && label(observed, "Markdown note body", false) && observed.isVisibleToUser(),
             "Refusing focus outside the observed owned Markdown body");
-        // Empty rich contenteditable nodes can leave the AX tree while idle.
-        // Focus the freshly observed named editor before checking stable tap
-        // bounds. No text is sent here; exact role and InputConnection ownership
-        // are still required by the following actions.
-        require(observed.isFocused() || observed.performAction(AccessibilityNodeInfo.ACTION_FOCUS),
-            "Owned named editor refused input focus; no text sent");
+        // WebView can refuse programmatic AX focus on an empty rich editor.
+        // Let the one real tap request focus; inputText still admits only the
+        // original app's InputConnection before sending any text. A refused AX
+        // action is not evidence that a physical tap failed.
         // The requested semantic name is known by the caller. Do not infer it
         // from a soon-to-be-replaced virtual node or retain its resource id.
         progress.append("tap target: owned Markdown note body editable role\n");
