@@ -11,6 +11,8 @@ import stat
 
 
 _ROLES = {
+    'config-command-intent': ('signed-association-config-command-intent.private.json', 4096),
+    'config-command-result': ('signed-association-config-command-result.private.json', 4096),
     'instrument-command-intent': ('instrument-command-intent.private.json', 4096),
     'stop-semantic-intent': ('stop-semantic-intent.private.json', 4096),
     'stop-command-intent': ('stop-command-intent.private.json', 4096),
