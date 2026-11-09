@@ -1,13 +1,14 @@
 """Own anonymous pre-spawn config pipes; no child or admission is created.
 
 Linux capabilities are required explicitly. This primitive only prepares the
-original input and retains private handles. A future spawning owner must claim
-them before sending; no handoff, actor adapter, reader or destructor is supplied.
+original input and retains private handles. Only the concrete pre-spawn resource
+owner can consume them; no spawning actor, reader or destructor is supplied.
 SAME bytes means the Python buffer, not zero-copy kernel data or readback ACK.
 """
 import os
 import stat
 import sys
+import weakref
 
 try:
     import fcntl
@@ -19,16 +20,51 @@ _ERROR = 'SIGNED_ASSOCIATION_CONFIG_CHANNELS_UNAVAILABLE'
 
 class OriginalAssociationConfigChannels:
     def __init__(self, original_input):
+        self._origin = weakref.ref(self)  # No callback/finalizer or cleanup.
+        self._handle_owner = self
         self._state = 'NEW'
         self._fds, self._uncertain_close = [], []
         self._pipes, self._identities = (), {}
         self._releasing = False
         self._input = None
+        self._transfer_reentered = False
         self._require(type(original_input) is bytes and 0 < len(original_input) <= 2048)
         self._input = original_input
 
+    def _issued(self):
+        reference = getattr(self, '_origin', None)
+        if type(reference) is not weakref.ReferenceType or reference() is not self:
+            # A copied object's fd numbers never become its owned descriptors.
+            self._state = 'FAILED'
+            self._fds, self._pipes, self._identities, self._input = [], (), {}, None
+            raise RuntimeError(_ERROR) from None
+        if self._handle_owner is not self:
+            if self._state != 'TRANSFERRED':
+                self._transfer_reentered = True
+            raise RuntimeError(_ERROR) from None
+
+    def _consume_for_resources(self, owner):
+        from android_release_sync_association_config_resources import OriginalAssociationConfigResources, _PRESPAWN_OWNERS
+        self._issued()
+        if type(owner) is not OriginalAssociationConfigResources:
+            raise RuntimeError(_ERROR) from None
+        reference = getattr(owner, '_origin', None)
+        if (type(reference) is not weakref.ReferenceType or reference() is not owner
+                or owner._channels is not self or owner._state != 'CLAIMING'
+                or not owner._registered or _PRESPAWN_OWNERS.get(id(owner)) is not owner):
+            raise RuntimeError(_ERROR) from None
+        self._require(self._state == 'READY')
+        vacant_fds, vacant_identities = [], {}
+        owner._fds, owner._pipes = self._fds, self._pipes
+        owner._identities, owner._input = self._identities, self._input
+        self._require(self._state == 'READY' and owner._state == 'CLAIMING')
+        self._handle_owner = owner  # One permission move before aliases clear.
+        self._fds, self._pipes, self._identities, self._input = vacant_fds, (), vacant_identities, None
+        owner._owned = True
+        self._state = 'TRANSFERRED'
+
     def _release(self):
-        if self._releasing:
+        if self._releasing or self._handle_owner is not self:
             return
         self._releasing = True
         try:
@@ -87,6 +123,7 @@ class OriginalAssociationConfigChannels:
         return values
 
     def provision(self):
+        self._issued()
         self._require(self._state == 'NEW')
         self._state = 'PROVISIONING'
         try:
@@ -148,6 +185,7 @@ class OriginalAssociationConfigChannels:
         self._state = 'READY'
 
     def close(self):
+        self._issued()
         if self._state == 'CLOSED':
             return
         self._require(self._state in ('NEW', 'READY'))

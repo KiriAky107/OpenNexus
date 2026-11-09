@@ -5,6 +5,7 @@ The actual factory/history/driver/clock/managed command source remains required.
 Object identity is neither a security boundary nor independent file readback.
 """
 from android_release_sync_association_private_files import OriginalAssociationPrivateFiles, _ROLES
+import weakref
 
 _ERROR = 'SIGNED_ASSOCIATION_CONFIG_JOURNALS_UNAVAILABLE'
 _INTENT = 'config-command-intent'
@@ -13,6 +14,7 @@ _RESULT = 'config-command-result'
 
 class OriginalAssociationConfigJournals:
     def __init__(self, store):
+        self._origin = weakref.ref(self)  # Construction lineage only, no finalizer.
         self._state = 'NEW'
         self._store = self._intent = self._result = None
         self._require(type(store) is OriginalAssociationPrivateFiles)
