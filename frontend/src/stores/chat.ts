@@ -477,7 +477,10 @@ export const useChatStore = defineStore('chat', () => {
         const failedClient = sseClient
         sseClient = null
         failedClient?.cancel()
-        const text = `\n\n${t('连接失败：', 'Connection failed: ')}${error.message}`
+        const reason = error.message === 'SSE_INCOMPLETE'
+          ? t('响应提前结束，请重新读取历史以核对已保存的回复。', 'The response ended early. Reload history to confirm the saved reply.')
+          : error.message
+        const text = `\n\n${t('连接失败：', 'Connection failed: ')}${reason}`
         aiMsg.content += text
         aiMsg.activity?.push({ type: 'text', text })
         aiMsg.tool_calls?.filter(call => call.status === 'running').forEach(call => { call.status = 'error'; call.error_message = t('连接中断，请核对实际运行状态。', 'Connection interrupted; check the actual run status.') })

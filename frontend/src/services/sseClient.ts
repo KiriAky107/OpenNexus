@@ -14,6 +14,8 @@ export interface SseClientOptions {
   body?: unknown
   token?: string
   lastEventId?: string
+  /** Require this domain terminal event; unset for resumable event segments. */
+  terminalEvent?: string
   onEvent?: SseEventHandler
   onError?: (error: Error) => void
   onOpen?: () => void
@@ -33,7 +35,7 @@ export class SseClient {
   }
 
   async connect() {
-    const { url, method = 'POST', body, token, lastEventId, onEvent, onError, onOpen, onDone } = this.options
+    const { url, method = 'POST', body, token, lastEventId, terminalEvent, onEvent, onError, onOpen, onDone } = this.options
 
     try {
       const headers: Record<string, string> = {
@@ -81,7 +83,9 @@ export class SseClient {
         try {
           const data = JSON.parse(dataLines.join('\n')) as Record<string, unknown>
           onEvent?.(eventName, data, eventId)
-          if (!doneNotified && ['Done', 'RunCompleted', 'RunFailed', 'RunCancelled'].includes(eventName)) {
+          const terminal = terminalEvent ? eventName === terminalEvent
+            : ['Done', 'RunCompleted', 'RunFailed', 'RunCancelled'].includes(eventName)
+          if (!doneNotified && terminal) {
             doneNotified = true
             onDone?.()
           }
@@ -119,7 +123,10 @@ export class SseClient {
       this.buffer += decoder.decode()
       if (this.buffer) consumeLine(this.buffer.replace(/\r$/, ''))
       dispatchEvent()
-      if (!doneNotified) onDone?.()
+      if (!doneNotified && !this.controller.signal.aborted) {
+        if (terminalEvent) throw new Error('SSE_INCOMPLETE')
+        onDone?.()
+      }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return
       onError?.(e as Error)
