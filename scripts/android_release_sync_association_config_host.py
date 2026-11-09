@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 import json
 import re
 import shlex
+import weakref
 
 import android_release_sync_association_records as records
 import android_release_sync_quota_records as common
@@ -65,6 +66,8 @@ class OriginalAssociationConfigPorts(ABC):
 
 class OriginalAssociationConfigStaging:
     def __init__(self, ports, *, launch_scope, vault_name, command_id):
+        self._origin = weakref.ref(self)
+        self._intent = self._send = None
         self._state = 'NEW'
         self._approved = None
         self._require(isinstance(ports, OriginalAssociationConfigPorts))
@@ -86,6 +89,7 @@ class OriginalAssociationConfigStaging:
 
     def _fail(self):
         self._state = 'FAILED'
+        self._intent = self._send = None
         self._approved = None
         raise RuntimeError(_ERROR) from None
 
@@ -129,6 +133,7 @@ class OriginalAssociationConfigStaging:
             private_destination=_PATH, stdin_bytes=len(self._input), automatic_retry=False))
         self._require(len(intent) <= 4096)
         self._require(self._call(self._ports.record_config_intent, intent) is None)
+        self._intent = intent
         staged = self._clock()
         self._require(staged < self._deadline)
         self._state = 'SENDING'
@@ -147,7 +152,9 @@ class OriginalAssociationConfigStaging:
             send_at = self._clock()
             self._require(send_at < self._deadline)
 
-        response = self._call(self._ports.stage_config, list(_ARGUMENTS), self._input,
+        arguments = list(_ARGUMENTS)
+        self._send = (before_send, arguments, self._input, self._deadline)
+        response = self._call(self._ports.stage_config, arguments, self._input,
             before_send, command_id=self._context['command_id'],
             timeout_ms=self._deadline-staged, deadline_ms=self._deadline)
         self._require(guard_calls == 1 and send_at is not None)

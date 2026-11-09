@@ -19,6 +19,7 @@ _ERROR = 'SIGNED_ASSOCIATION_CONFIG_EXECUTABLE_UNAVAILABLE'
 class OriginalAssociationConfigExecutable:
     def __init__(self, sdk_root):
         self._origin = weakref.ref(self)  # No callback or automatic cleanup.
+        self._handle_owner = self
         self._state = 'NEW'
         self._fds, self._edges, self._uncertain_close = [], [], []
         self._releasing = False
@@ -39,9 +40,11 @@ class OriginalAssociationConfigExecutable:
             self._fds, self._edges = [], []  # A copy never owns original fds.
             self._arguments = self._executable = None
             raise RuntimeError(_ERROR) from None
+        if self._handle_owner is not self:
+            raise RuntimeError(_ERROR) from None
 
     def _release(self):
-        if self._releasing:
+        if self._releasing or self._handle_owner is not self:
             return
         self._releasing = True
         try:
@@ -162,3 +165,18 @@ class OriginalAssociationConfigExecutable:
         self._require(self._state == 'CLOSING' and not self._uncertain_close)
         self._arguments = self._executable = None
         self._state = 'CLOSED'
+
+    def _consume_for_kernel(self, kernel):
+        from android_release_sync_association_config_kernel import OriginalAssociationConfigKernel, _OWNERS
+        self._issued()
+        if (type(kernel) is not OriginalAssociationConfigKernel
+                or not OriginalAssociationConfigKernel._original(kernel)
+                or _OWNERS.get(id(kernel)) is not kernel or kernel._state != 'CONSUMING'
+                or kernel._native._executable is not self):
+            raise RuntimeError(_ERROR) from None
+        self._require(self._state == 'READY')
+        vacant_fds, vacant_edges = [], []
+        kernel._pin_fds, kernel._pin_edges = self._fds, self._edges
+        self._handle_owner = kernel  # Capture every original before revoking close.
+        self._fds, self._edges, self._arguments, self._executable = vacant_fds, vacant_edges, None, None
+        self._state = 'TRANSFERRED'

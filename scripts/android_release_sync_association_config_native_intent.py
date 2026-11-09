@@ -24,14 +24,14 @@ class OriginalAssociationConfigNativeIntent:
     def __init__(self, resources, executable):
         self._origin = weakref.ref(self)
         self._state = 'NEW'
-        self._entry = self._sources = self._clock_source = None
+        self._entry = self._sources = self._clock_source = self._stamp = None
         self._require(type(resources) is OriginalAssociationConfigResources
             and type(executable) is OriginalAssociationConfigExecutable)
         self._resources, self._executable = resources, executable
 
     def _fail(self):
         self._state = 'FAILED'
-        self._entry = self._sources = self._clock_source = None
+        self._entry = self._sources = self._clock_source = self._stamp = None
         # Validation owns no fd. Only the actual store writer handles its errors.
         raise RuntimeError(_ERROR) from None
 
@@ -158,6 +158,7 @@ class OriginalAssociationConfigNativeIntent:
                 and type(entry[3]) is tuple and len(entry[3]) == 4
                 and all(type(v) is int and v >= 0 for v in entry[3]))
             self._entry, self._sources, self._clock_source = entry, sources, clock
+            self._stamp = stamp
             self._state = 'RECORDED'
         except BaseException:
             self._fail()

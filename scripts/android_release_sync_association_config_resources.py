@@ -146,7 +146,7 @@ class OriginalAssociationConfigResources:
 
     def monotonic_ms(self):
         self._issued()
-        self._require(self._state in ('NEW', 'READY'))
+        self._require(self._state in ('NEW', 'READY', 'TRANSFERRED'))
         original_state = self._state
         try:
             value = self._clock_source()
@@ -160,6 +160,9 @@ class OriginalAssociationConfigResources:
 
     def close(self):
         self._issued()
+        if self._state == 'TRANSFERRED' or (self._channels is not None
+                and self._channels._handle_owner is not self and self._owned):
+            raise RuntimeError(_ERROR) from None
         if self._state == 'CLOSED':
             return
         self._require(self._state in ('NEW', 'READY'))
@@ -168,3 +171,17 @@ class OriginalAssociationConfigResources:
         self._require(self._state == 'CLOSING' and not self._uncertain_close and self._drop())
         self._input, self._pipes, self._identities, self._buffers = None, (), {}, None
         self._state = 'CLOSED'
+
+    def _consume_for_kernel(self, kernel):
+        from android_release_sync_association_config_kernel import OriginalAssociationConfigKernel, _OWNERS
+        self._issued()
+        if (type(kernel) is not OriginalAssociationConfigKernel or not self._original(kernel)
+                or _OWNERS.get(id(kernel)) is not kernel or kernel._state != 'CONSUMING'
+                or kernel._native._resources is not self):
+            raise RuntimeError(_ERROR) from None
+        self._require(self._state == 'READY' and self._channels._handle_owner is self)
+        vacant_fds, vacant_ids = [], {}
+        kernel._pipe_fds, kernel._pipes, kernel._pipe_ids = self._fds, self._pipes, self._identities
+        self._channels._handle_owner = kernel  # One close-permission move.
+        self._fds, self._pipes, self._identities, self._input, self._buffers = vacant_fds, (), vacant_ids, None, None
+        self._state = 'TRANSFERRED'  # Only the original clock remains usable.
