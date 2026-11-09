@@ -252,9 +252,23 @@ public class RuntimeProbe extends Instrumentation {
 
     @Override public void onCreate(Bundle args) { super.onCreate(args); arguments = args; start(); }
 
+    /** Opt-in closed output for the dedicated preconfig quota Note producer. */
+    protected String privatePhaseNamespace() { return null; }
+    protected static final String PRIVATE_QUOTA_SEED_NAMESPACE = "SIGNED_QUOTA_SEED";
+    protected static final String PRIVATE_QUOTA_SEED_OK =
+        "OPENNEXUS_SIGNED_QUOTA_SEED_UI note_Save_UI_observed=true raw_UI_recorded=false native_original_state_verified=false\n"
+        + "OPENNEXUS_SIGNED_QUOTA_SEED_PHASE_OK markdown\n";
+    protected static final String PRIVATE_QUOTA_SEED_FAILED =
+        "OPENNEXUS_SIGNED_QUOTA_SEED_PHASE_FAILED raw_UI_recorded=false native_original_state_verified=false\n";
+
     @Override public void onStart() {
         Bundle result = new Bundle();
+        final String privateNamespace = privatePhaseNamespace();
         try {
+            if (privateNamespace != null) require(PRIVATE_QUOTA_SEED_NAMESPACE.equals(privateNamespace)
+                && stableRelease && "cc.kronecker.opennexus".equals(APP)
+                && arguments != null && arguments.size() == 1 && arguments.get("phase") instanceof String
+                && "markdown".equals(arguments.get("phase")), "Private Note scope refused");
             ui = getUiAutomation();
             AccessibilityServiceInfo info = ui.getServiceInfo();
             info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
@@ -703,12 +717,15 @@ public class RuntimeProbe extends Instrumentation {
                     break;
                 default: throw new IllegalStateException("Unknown runtime phase: " + phase);
             }
-            result.putString("stream", progress + "OPENNEXUS_RUNTIME_PHASE_OK " + phase + "\n");
+            result.putString("stream", privateNamespace == null
+                ? progress + "OPENNEXUS_RUNTIME_PHASE_OK " + phase + "\n" : PRIVATE_QUOTA_SEED_OK);
             result.putString("phase", phase);
             finish(0, result);
         } catch (Throwable error) {
-            result.putString("stream", progress + "OPENNEXUS_RUNTIME_FAILED while " + waitingFor
-                + "\n" + Log.getStackTraceString(error) + "\n" + tree());
+            result.putString("stream", privateNamespace == null
+                ? progress + "OPENNEXUS_RUNTIME_FAILED while " + waitingFor
+                    + "\n" + Log.getStackTraceString(error) + "\n" + tree()
+                : PRIVATE_QUOTA_SEED_FAILED);
             finish(1, result);
         }
     }
@@ -2564,10 +2581,11 @@ public class RuntimeProbe extends Instrumentation {
             SystemClock.sleep(200);
         } while (SystemClock.uptimeMillis() < until);
         if (closedSyncRead) throw new IllegalStateException("Closed peer read target timed out");
+        if (privatePhaseNamespace() != null) throw new IllegalStateException("Private Note UI target timed out");
         throw new IllegalStateException("UI target timed out\n" + tree());
     }
 
-    private List<AccessibilityNodeInfo> nodes() {
+    protected List<AccessibilityNodeInfo> nodes() {
         List<AccessibilityNodeInfo> found = new ArrayList<>();
         // WebView may otherwise return the pre-dialog virtual-node snapshot.
         // This clears only the test client's accessibility cache, not app data.
