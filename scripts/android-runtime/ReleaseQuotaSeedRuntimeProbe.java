@@ -7,22 +7,31 @@ import java.util.List;
 /** Source-only fixed Note GUI seed. UI output is never a Native Save ID or ACK. */
 public final class ReleaseQuotaSeedRuntimeProbe extends RuntimeProbe {
     private static final String DRIVER="cc.kronecker.opennexus.testdriver";
-    private boolean created,started,closed,terminal,revoked;
+    private boolean creating,created,started,closed,terminal,revoked;
 
     public ReleaseQuotaSeedRuntimeProbe() {super(true);}
     @Override protected String privatePhaseNamespace() {return PRIVATE_QUOTA_SEED_NAMESPACE;}
+    private boolean creationOpen() {return creating && !created && !closed && !terminal && !revoked;}
     @Override public void onCreate(Bundle args) {
+        if(creating || created || closed || terminal || revoked) {refuse();return;}
+        creating=true;
         try {
-            if(created || closed || args==null || args.size()!=1
-                || !(args.get("phase") instanceof String) || !"markdown".equals(args.get("phase"))) {
-                refuse();return;
-            }
-            if(!DRIVER.equals(getContext().getPackageName())
-                || !DRIVER.equals(getTargetContext().getPackageName())) {refuse();return;}
-            created=true;
+            if(args==null) {refuse();return;}
+            int size=args.size();if(!creationOpen() || size!=1) {refuse();return;}
+            Object phase=args.get("phase");
+            if(!creationOpen() || !(phase instanceof String) || !"markdown".equals(phase)) {refuse();return;}
+            android.content.Context context=getContext();
+            if(!creationOpen() || context==null) {refuse();return;}
+            String owner=context.getPackageName();
+            if(!creationOpen() || !DRIVER.equals(owner)) {refuse();return;}
+            android.content.Context target=getTargetContext();
+            if(!creationOpen() || target==null) {refuse();return;}
+            String targetOwner=target.getPackageName();
+            if(!creationOpen() || !DRIVER.equals(targetOwner)) {refuse();return;}
             Bundle original=new Bundle();original.putString("phase","markdown");
+            created=true;creating=false;
             super.onCreate(original);
-        } catch(Throwable error) {refuse();}
+        } catch(Throwable error) {refuse();} finally {creating=false;}
     }
     @Override public void onStart() {
         if(!created || started || closed) {refuse();return;}
@@ -33,7 +42,7 @@ public final class ReleaseQuotaSeedRuntimeProbe extends RuntimeProbe {
         if(!created || !started || closed) throw new IllegalStateException("Private Note UI closed");
         return super.nodes();
     }
-    private void refuse() {revoked=true;closed=true;finish(1,null);}
+    private void refuse() {creating=false;revoked=true;closed=true;finish(1,null);}
     @Override public void sendStatus(int code,Bundle value) {refuse();}
     @Override public void finish(int code,Bundle value) {
         if(terminal) {revoked=true;return;}

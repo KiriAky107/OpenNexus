@@ -10,24 +10,33 @@ public final class ReleaseQuotaLoginRuntimeProbe extends AuthRuntimeProbe {
     static final String UI="OPENNEXUS_SIGNED_QUOTA_LOGIN_UI signed_in_UI_observed=true raw_UI_recorded=false native_original_state_verified=false\n";
     static final String OK="OPENNEXUS_SIGNED_QUOTA_LOGIN_PHASE_OK login-a\n";
     static final String FAILED="OPENNEXUS_SIGNED_QUOTA_LOGIN_PHASE_FAILED raw_UI_recorded=false native_original_state_verified=false\n";
-    private boolean created,started,closed,terminal,revoked,signedInEntered,uiObserved,uiSent;
+    private boolean creating,created,started,closed,terminal,revoked,signedInEntered,uiObserved,uiSent;
 
     public ReleaseQuotaLoginRuntimeProbe() {super(true);}
     @Override protected String namespace() {return "SIGNED_QUOTA_LOGIN";}
     @Override protected boolean viewportAdmission() {return true;}
     @Override protected boolean productUiObservationClosed() {return true;}
+    private boolean creationOpen() {return creating && !created && !closed && !terminal && !revoked;}
     @Override public void onCreate(Bundle args) {
+        if(creating || created || closed || terminal || revoked) {refuse();return;}
+        creating=true;
         try {
-            if(created || closed || args==null || args.size()!=1
-                || !(args.get("phase") instanceof String) || !"login-a".equals(args.get("phase"))) {
-                refuse();return;
-            }
-            if(!DRIVER.equals(getContext().getPackageName())
-                || !DRIVER.equals(getTargetContext().getPackageName())) {refuse();return;}
-            created=true;
+            if(args==null) {refuse();return;}
+            int size=args.size();if(!creationOpen() || size!=1) {refuse();return;}
+            Object phase=args.get("phase");
+            if(!creationOpen() || !(phase instanceof String) || !"login-a".equals(phase)) {refuse();return;}
+            android.content.Context context=getContext();
+            if(!creationOpen() || context==null) {refuse();return;}
+            String owner=context.getPackageName();
+            if(!creationOpen() || !DRIVER.equals(owner)) {refuse();return;}
+            android.content.Context target=getTargetContext();
+            if(!creationOpen() || target==null) {refuse();return;}
+            String targetOwner=target.getPackageName();
+            if(!creationOpen() || !DRIVER.equals(targetOwner)) {refuse();return;}
             Bundle original=new Bundle();original.putString("phase","login-a");
+            created=true;creating=false;
             super.onCreate(original);
-        } catch(Throwable error) {refuse();}
+        } catch(Throwable error) {refuse();} finally {creating=false;}
     }
     @Override public void onStart() {
         if(!created || started || closed) {refuse();return;}
@@ -44,7 +53,7 @@ public final class ReleaseQuotaLoginRuntimeProbe extends AuthRuntimeProbe {
         if(closed || revoked) {refuse();return;}
         uiObserved=true;Bundle result=new Bundle();result.putString("stream",UI);sendStatus(1,result);
     }
-    private void refuse() {revoked=true;closed=true;finish(1,null);}
+    private void refuse() {creating=false;revoked=true;closed=true;finish(1,null);}
     @Override public void sendStatus(int code,Bundle value) {
         if(terminal) {revoked=true;return;}
         boolean valid=false;

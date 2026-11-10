@@ -128,7 +128,7 @@ public final class ReleaseQuotaPrivateGuiMemoryCheck {
             need(actual.containsKey(prefix+name));entries.put(prefix+name,actual.get(prefix+name));
         }
         DataInputStream input=new DataInputStream(System.in);need(input.readInt()==0x4f4e5847);
-        int count=input.readInt();need(count==8);List<JavaFileObject> controlled=new ArrayList<>();Set<String> names=new HashSet<>();
+        int count=input.readInt();need(count==8 || count==9);List<JavaFileObject> controlled=new ArrayList<>();Set<String> names=new HashSet<>();
         for(int index=0;index<count;index++) {
             String name=text(input,256);need(name.matches("[A-Za-z0-9_/]+\\.java") && names.add(name));
             controlled.add(new Source(name,text(input,65536)));
@@ -144,7 +144,9 @@ public final class ReleaseQuotaPrivateGuiMemoryCheck {
                 byte[] raw=value.raw();return defineClass(name,raw,0,raw.length);
             }
         };
-        loader.loadClass(prefix+"ReleaseQuotaPrivateGuiCheck").getMethod("main",String[].class).invoke(null,(Object)new String[0]);
+        String check=System.getProperty("onx.private_gui_check","ReleaseQuotaPrivateGuiCheck");
+        need(check.equals("ReleaseQuotaPrivateGuiCheck") || check.equals("ReleaseQuotaPrivateCreateCheck"));
+        loader.loadClass(prefix+check).getMethod("main",String[].class).invoke(null,(Object)new String[0]);
         System.out.println("{\"API36_source_count\":"+parsed.size()+",\"API36_class_count\":"+actual.size()
             +",\"controlled_class_count\":"+model.size()+",\"API36_new_entry_bytecode_reused\":true,\"filesystem_outputs\":0}");
     }

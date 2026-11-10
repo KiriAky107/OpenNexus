@@ -33,6 +33,8 @@ public final class ReleaseQuotaPrivateGuiCheck {
         need(Control.uiReads==reads);
     }
     private static void check(String name,Runnable body) {
+        String selected=System.getProperty("onx.private_gui_checks");
+        if(selected!=null && !java.util.Arrays.asList(selected.split(",",-1)).contains(name))return;
         need(!ran.contains(name));ran.add(name);body.run();
     }
     public static void main(String[] ignored) {
