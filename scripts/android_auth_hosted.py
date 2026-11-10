@@ -97,14 +97,53 @@ def download_cloudflared(root):
     return {'release':'2026.10.1','url':CLOUDFLARED_URL,'bytes':size,'sha256':digest.hexdigest(),'docs':DOCS}
 
 
+_FRESH_ERROR = 'OWNED_AUTH_FRESH_QUOTA32_PREPARE_UNAVAILABLE'
+
+
 class HostedOrigin:
-    def __init__(self,root,*,fixture='auth'):
+    def __init__(self,root,*,fixture='auth',fresh_quota32=False):
+        self._fresh_quota32=False
+        self._fresh_state='CONSTRUCTING'
+        self._fresh_prepare_proof=None
+        if type(fresh_quota32) is not bool:self._fresh_fail()
+        self._fresh_quota32=fresh_quota32
+        if fresh_quota32:
+            try:
+                self._fresh_need(type(fixture) is str and fixture=='signed-release-quota32'
+                    and type(root) is type(Path()) and root.is_absolute() and '..' not in root.parts)
+                self._prepare_step(require_hosted)
+                expected=self._prepare_step(owned_root)
+                self._fresh_need(type(expected) is type(root) and root==expected
+                    and self._prepare_step(root.resolve)==root
+                    and not self._prepare_step(root.is_symlink)
+                    and not self._prepare_step(root.exists))
+                self.fixture,self.root,self.path=fixture,root,root/'owner-state.json'
+                self.state,self.processes=None,[]
+                self._fresh_state='NEW'
+                return
+            except BaseException:self._fresh_fail()
         require(fixture in ('auth','sync','sync-expiration','sync-quota','signed-release-quota32'),'OWNED_AUTH_FIXTURE_INVALID')
         self.fixture=fixture
         self.root=root
         self.path=root/'owner-state.json'
         self.state=read_json(self.path) if self.path.exists() else None
         self.processes=[]
+
+    def _fresh_fail(self):
+        self._fresh_state='FAILED'
+        self._fresh_prepare_proof=None
+        raise RuntimeError(_FRESH_ERROR) from None
+
+    def _fresh_need(self,value):
+        if not value:self._fresh_fail()
+
+    def _prepare_step(self,function,*args,**kwargs):
+        if not self._fresh_quota32:return function(*args,**kwargs)
+        phase=self._fresh_state
+        self._fresh_need(phase in ('CONSTRUCTING','PREPARING'))
+        value=function(*args,**kwargs)
+        self._fresh_need(self._fresh_state==phase)
+        return value
 
     def fixture_script(self):
         names={'auth':'android_auth_fixture.py','sync':'android_sync_fixture.py','sync-expiration':'android_sync_expiration.py','sync-quota':'android_sync_quota.py','signed-release-quota32':'android_release_sync_quota_fixture.py'}
@@ -153,78 +192,98 @@ class HostedOrigin:
         intent['image_id']=resolved;self.save()
 
     def prepare(self):
-        require_hosted();require(not self.root.exists(),'OWNED_AUTH_ALREADY_PREPARED')
-        fixture=self.fixture_script()
-        self.root.mkdir(mode=0o700);(self.root/'home').mkdir(mode=0o700);(self.root/'staging').mkdir(mode=0o700)
-        source=Path(os.environ['GITHUB_WORKSPACE']).resolve()/'.build/android-auth-source'
-        require(subprocess.check_output(['git','rev-parse','HEAD'],cwd=source,text=True).strip()==SERVICE_SHA,'OWNED_AUTH_SOURCE_CHANGED')
-        require(not subprocess.check_output(['git','status','--porcelain'],cwd=source),'OWNED_AUTH_SOURCE_CHANGED')
+        if not self._fresh_quota32:return self._prepare()
+        self._fresh_need(self._fresh_state=='NEW')
+        self._fresh_state='PREPARING'
+        try:
+            expected=self._prepare_step(owned_root)
+            self._fresh_need(type(expected) is type(self.root) and expected==self.root)
+            result=self._prepare()
+            self._fresh_need(self._fresh_state=='PREPARING' and self._fresh_prepare_proof is not None)
+            self._fresh_state='PREPARED'
+            return result
+        except BaseException:self._fresh_fail()
+
+    def _prepare(self):
+        step=self._prepare_step
+        step(require_hosted);require(not step(self.root.exists),'OWNED_AUTH_ALREADY_PREPARED')
+        fixture=step(self.fixture_script)
+        step(self.root.mkdir,mode=0o700);step((self.root/'home').mkdir,mode=0o700);step((self.root/'staging').mkdir,mode=0o700)
+        source=step(Path(os.environ['GITHUB_WORKSPACE']).resolve)/'.build/android-auth-source'
+        require(step(subprocess.check_output,['git','rev-parse','HEAD'],cwd=source,text=True).strip()==SERVICE_SHA,'OWNED_AUTH_SOURCE_CHANGED')
+        require(not step(subprocess.check_output,['git','status','--porcelain'],cwd=source),'OWNED_AUTH_SOURCE_CHANGED')
         suffix=os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']
-        self.state={'schema':1,'source':SERVICE_SHA,'owner':suffix+'-'+secrets.token_hex(12),
-            'result':'preparing','fixture':self.fixture,'fixture_script_sha256':hashlib.sha256(fixture.read_bytes()).hexdigest(),
-            'process_intents':{},'containers':[]};self.save()
-        initialize_control(self.root)
+        self.state={'schema':1,'source':SERVICE_SHA,'owner':suffix+'-'+step(secrets.token_hex,12),
+            'result':'preparing','fixture':self.fixture,'fixture_script_sha256':hashlib.sha256(step(fixture.read_bytes)).hexdigest(),
+            'process_intents':{},'containers':[]};step(self.save)
+        step(initialize_control,self.root)
         if self.fixture in ('sync','sync-expiration','sync-quota','signed-release-quota32'):
             from android_sync_fixture import initialize_control as initialize_sync_control
-            initialize_sync_control(self.root)
+            step(initialize_sync_control,self.root)
         if self.fixture=='sync-expiration':
             from android_sync_expiration import OwnedClock
-            OwnedClock.initialize(self.root)
-        password=secrets.token_urlsafe(40);access='android-own-'+secrets.token_hex(4);secret=secrets.token_urlsafe(40)
+            step(OwnedClock.initialize,self.root)
+        password=step(secrets.token_urlsafe,40);access='android-own-'+step(secrets.token_hex,4);secret=step(secrets.token_urlsafe,40)
         bucket='onx-android-auth-'+suffix
-        accounts=[{'username':'android-owned-'+kind+'-'+secrets.token_hex(6),'password':secrets.token_urlsafe(32),
+        accounts=[{'username':'android-owned-'+kind+'-'+step(secrets.token_hex,6),'password':step(secrets.token_urlsafe,32),
             'device_name':'Owned Android '+kind+' '+suffix} for kind in ('a','b')]
         environment={'SYNC_DATABASE_URL':'postgresql+psycopg://android_owned:'+password+'@127.0.0.1:15472/android_auth',
             'SYNC_S3_ENDPOINT':'http://127.0.0.1:19072','SYNC_S3_BUCKET':bucket,'SYNC_STAGING_DIR':str(self.root/'staging'),
             'SYNC_OPERATIONS_PATH':str(self.root/'operations.sqlite3'),'AWS_ACCESS_KEY_ID':access,
             'AWS_SECRET_ACCESS_KEY':secret,'AWS_DEFAULT_REGION':'us-east-1','AWS_EC2_METADATA_DISABLED':'true'}
-        atomic_json(self.root/'service-private.json',{'source':SERVICE_SHA,'bucket':bucket,'accounts':accounts,'environment':environment},exclusive=True)
-        docker_env=minimal_environment(self.root)
+        step(atomic_json,self.root/'service-private.json',{'source':SERVICE_SHA,'bucket':bucket,'accounts':accounts,'environment':environment},exclusive=True)
+        docker_env=step(minimal_environment,self.root)
         docker_env.update(POSTGRES_USER='android_owned',POSTGRES_DB='android_auth',POSTGRES_PASSWORD=password,
             MINIO_ROOT_USER=access,MINIO_ROOT_PASSWORD=secret)
         image='opennexus-auth-objects:'+suffix
-        self.command(['docker','build','--file',source/'Dockerfile.objects','--tag',image,source], 'build-objects',timeout=1200)
-        self.start_container('onx-auth-pg-'+suffix,'postgres:17.6',
+        step(self.command,['docker','build','--file',source/'Dockerfile.objects','--tag',image,source], 'build-objects',timeout=1200)
+        step(self.start_container,'onx-auth-pg-'+suffix,'postgres:17.6',
             ['--publish','127.0.0.1:15472:5432','--env','POSTGRES_USER','--env','POSTGRES_DB','--env','POSTGRES_PASSWORD'],docker_env)
-        self.start_container('onx-auth-objects-'+suffix,image,
+        step(self.start_container,'onx-auth-objects-'+suffix,image,
             ['--publish','127.0.0.1:19072:9000','--env','MINIO_ROOT_USER','--env','MINIO_ROOT_PASSWORD'],docker_env)
-        runtime_env=minimal_environment(self.root);runtime_env.update(environment)
+        runtime_env=step(minimal_environment,self.root);runtime_env.update(environment)
         python=source/'.venv/bin/python'
-        self.command([python,'-m','sync_server','initialize','--workers','1'],'initialize-service',env=runtime_env,cwd=source,timeout=150)
-        self.command([python,fixture,'seed'],'seed-owned-users',env=runtime_env,cwd=source)
-        self.spawn('service',[python,fixture,'serve','--owner-run',suffix],runtime_env)
-        deadline=time.monotonic()+45
+        step(self.command,[python,'-m','sync_server','initialize','--workers','1'],'initialize-service',env=runtime_env,cwd=source,timeout=150)
+        step(self.command,[python,fixture,'seed'],'seed-owned-users',env=runtime_env,cwd=source)
+        step(self.spawn,'service',[python,fixture,'serve','--owner-run',suffix],runtime_env)
+        deadline=step(time.monotonic)+45
         while True:
             try:
-                origin_handshake('http://127.0.0.1:19073');break
+                step(origin_handshake,'http://127.0.0.1:19073');break
             except Exception:
-                require(time.monotonic()<deadline,'OWNED_AUTH_ORIGIN_NOT_READY');time.sleep(.25)
-        asset=download_cloudflared(self.root)
+                if self._fresh_quota32:self._fresh_need(self._fresh_state=='PREPARING')
+                require(step(time.monotonic)<deadline,'OWNED_AUTH_ORIGIN_NOT_READY');step(time.sleep,.25)
+        asset=step(download_cloudflared,self.root)
         argv=[self.root/'cloudflared','tunnel','--no-autoupdate','--protocol','http2','--loglevel','info',
             '--logfile',self.root/'tunnel-origin.private.log','--url','http://127.0.0.1:19073']
-        tunnel=self.spawn('tunnel',argv,minimal_environment(self.root))
-        endpoint=None;deadline=time.monotonic()+90
-        while time.monotonic()<deadline and tunnel.poll() is None:
+        tunnel=step(self.spawn,'tunnel',argv,step(minimal_environment,self.root))
+        endpoint=None;deadline=step(time.monotonic)+90
+        while step(time.monotonic)<deadline and step(tunnel.poll) is None:
             log=self.root/'tunnel-origin.private.log'
-            text=log.read_text('utf-8',errors='replace') if log.exists() else ''
+            text=step(log.read_text,'utf-8',errors='replace') if step(log.exists) else ''
             values=re.findall(r'https://[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com',text)
             if values:endpoint=values[0];break
-            time.sleep(.25)
+            step(time.sleep,.25)
         require(endpoint is not None,'OWNED_AUTH_TUNNEL_NOT_READY')
         # This is only origin readiness from the runner, not Android TLS proof.
-        deadline=time.monotonic()+90
+        deadline=step(time.monotonic)+90
         while True:
             try:
-                handshake=origin_handshake(endpoint);break
+                handshake=step(origin_handshake,endpoint);break
             except Exception:
-                require(time.monotonic()<deadline,'OWNED_AUTH_TUNNEL_NOT_READY');time.sleep(.5)
-        atomic_json(self.root/'device-private.json',{'endpoint':endpoint,'accounts':accounts},exclusive=True)
-        self.state.update(result='ready',endpoint=endpoint,cloudflared=asset,bucket=bucket);self.save()
+                if self._fresh_quota32:self._fresh_need(self._fresh_state=='PREPARING')
+                require(step(time.monotonic)<deadline,'OWNED_AUTH_TUNNEL_NOT_READY');step(time.sleep,.5)
+        step(atomic_json,self.root/'device-private.json',{'endpoint':endpoint,'accounts':accounts},exclusive=True)
+        self.state.update(result='ready',endpoint=endpoint,cloudflared=asset,bucket=bucket);step(self.save)
         if self.fixture=='signed-release-quota32':
             # Original zero counts precede any consumer's Android login/Setup.
             # Later admission reads this exclusive historical proof, not PG zero again.
-            from android_release_sync_quota_fixture import verify_prepared
-            verify_prepared(self.root)
+            from android_release_sync_quota_fixture import verify_prepared,proof_shape
+            if self._fresh_quota32:
+                proof=step(verify_prepared,self.root,fresh=True)
+                step(proof_shape,proof,suffix,self.state)
+                self._fresh_prepare_proof=proof  # Original returned metadata, not file readback/ACK.
+            else:step(verify_prepared,self.root)
         return {'source':SERVICE_SHA,'fixture':self.fixture,'fixture_script_sha256':self.state['fixture_script_sha256'],
             'endpoint':endpoint,'providers':'Owned PostgreSQL17.6/S3 and actual production initialize/create-user CLI',
             'images':[{'requested':item['image'],'resolved_id':item['image_id']} for item in self.state['containers']],

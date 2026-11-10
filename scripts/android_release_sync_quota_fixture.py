@@ -130,9 +130,11 @@ def require_prepare_proof(owner, *, state=None, config=None):
 
 
 @closed_errors
-def verify_prepared(owner):
+def verify_prepared(owner, *, fresh=False):
+    need(type(fresh) is bool)
     run,state,config = _owned(owner, ready=True)
     if (owner/PROOF).exists() or (owner/PROOF).is_symlink():
+        need(not fresh)
         # Reconcile only this original exclusive record; never requery a later
         # login state or rewrite/repair a partial/unknown first write.
         return proof_shape(read_metadata(owner/PROOF), run, state)
