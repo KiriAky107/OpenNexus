@@ -92,6 +92,7 @@ export function streamChat(
   const client = new SseClient({
     url: '/api/chat',
     method: 'POST',
+    terminalEvent: 'Done',
     body: request,
     onEvent: (eventName, data) => {
       handlers.onEvent?.({
