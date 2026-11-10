@@ -10,7 +10,7 @@ public final class ReleaseQuotaLoginRuntimeProbe extends AuthRuntimeProbe {
     static final String UI="OPENNEXUS_SIGNED_QUOTA_LOGIN_UI signed_in_UI_observed=true raw_UI_recorded=false native_original_state_verified=false\n";
     static final String OK="OPENNEXUS_SIGNED_QUOTA_LOGIN_PHASE_OK login-a\n";
     static final String FAILED="OPENNEXUS_SIGNED_QUOTA_LOGIN_PHASE_FAILED raw_UI_recorded=false native_original_state_verified=false\n";
-    private boolean creating,created,started,closed,terminal,revoked,signedInEntered,uiObserved,uiSent;
+    private boolean creating,created,started,closed,terminal,revoked,signedInEntered,uiObserved,uiSent,statusSending;
 
     public ReleaseQuotaLoginRuntimeProbe() {super(true);}
     @Override protected String namespace() {return "SIGNED_QUOTA_LOGIN";}
@@ -53,27 +53,39 @@ public final class ReleaseQuotaLoginRuntimeProbe extends AuthRuntimeProbe {
         if(closed || revoked) {refuse();return;}
         uiObserved=true;Bundle result=new Bundle();result.putString("stream",UI);sendStatus(1,result);
     }
-    private void refuse() {creating=false;revoked=true;closed=true;finish(1,null);}
+    private void refuse() {creating=false;statusSending=false;revoked=true;closed=true;finish(1,null);}
+    private boolean statusOpen() {
+        return created && started && !closed && !terminal && !revoked
+            && uiObserved && !uiSent && statusSending;
+    }
     @Override public void sendStatus(int code,Bundle value) {
         if(terminal) {revoked=true;return;}
-        boolean valid=false;
+        if(!created || !started || closed || revoked || !uiObserved || uiSent || statusSending
+            || code!=1 || value==null) {refuse();return;}
+        statusSending=true;
         try {
-            valid=created && started && !closed && !revoked && uiObserved && !uiSent && code==1
-                && value!=null && value.size()==1 && value.get("stream") instanceof String
-                && UI.equals(value.get("stream"));
-        } catch(RuntimeException error) {revoked=true;}
-        if(!valid || revoked) {refuse();return;}
-        uiSent=true;Bundle result=new Bundle();result.putString("stream",UI);
-        try {super.sendStatus(1,result);} catch(RuntimeException error) {refuse();throw error;}
+            int size=value.size();if(!statusOpen() || size!=1) {refuse();return;}
+            Object stream=value.get("stream");
+            if(!statusOpen() || !(stream instanceof String) || !UI.equals(stream)) {refuse();return;}
+            Bundle result=new Bundle();result.putString("stream",UI);
+            super.sendStatus(1,result);
+            if(!statusOpen()) {refuse();return;}
+            uiSent=true;
+        } catch(Throwable error) {refuse();} finally {statusSending=false;}
     }
+    private boolean resultOpen() {return terminal && closed && !revoked;}
     @Override public void finish(int code,Bundle value) {
         if(terminal) {revoked=true;return;}
         boolean original=created && started && !closed && !revoked && uiSent;
         terminal=true;closed=true;boolean success=false;
         try {
-            success=original && code==0 && value!=null && value.size()==1
-                && value.get("stream") instanceof String && OK.equals(value.get("stream"));
-        } catch(RuntimeException error) {revoked=true;}
+            success=original && code==0 && value!=null;
+            if(success) {int size=value.size();success=resultOpen() && size==1;}
+            if(success) {
+                Object stream=value.get("stream");
+                success=resultOpen() && stream instanceof String && OK.equals(stream);
+            }
+        } catch(Throwable error) {revoked=true;}
         success &= !revoked;
         Bundle result=new Bundle();result.putString("stream",success?OK:FAILED);
         try {super.finish(success?0:1,result);} catch(RuntimeException error) {revoked=true;throw error;}

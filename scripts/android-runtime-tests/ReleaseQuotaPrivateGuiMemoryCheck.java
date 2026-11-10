@@ -145,7 +145,8 @@ public final class ReleaseQuotaPrivateGuiMemoryCheck {
             }
         };
         String check=System.getProperty("onx.private_gui_check","ReleaseQuotaPrivateGuiCheck");
-        need(check.equals("ReleaseQuotaPrivateGuiCheck") || check.equals("ReleaseQuotaPrivateCreateCheck"));
+        need(check.equals("ReleaseQuotaPrivateGuiCheck") || check.equals("ReleaseQuotaPrivateCreateCheck")
+            || check.equals("ReleaseQuotaPrivateResultCheck"));
         loader.loadClass(prefix+check).getMethod("main",String[].class).invoke(null,(Object)new String[0]);
         System.out.println("{\"API36_source_count\":"+parsed.size()+",\"API36_class_count\":"+actual.size()
             +",\"controlled_class_count\":"+model.size()+",\"API36_new_entry_bytecode_reused\":true,\"filesystem_outputs\":0}");

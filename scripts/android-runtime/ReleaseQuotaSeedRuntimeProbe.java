@@ -44,16 +44,24 @@ public final class ReleaseQuotaSeedRuntimeProbe extends RuntimeProbe {
     }
     private void refuse() {creating=false;revoked=true;closed=true;finish(1,null);}
     @Override public void sendStatus(int code,Bundle value) {refuse();}
+    private boolean resultOpen() {return terminal && closed && !revoked;}
     @Override public void finish(int code,Bundle value) {
         if(terminal) {revoked=true;return;}
         boolean original=created && started && !closed && !revoked;
         terminal=true;closed=true;
         boolean success=false;
         try {
-            success=original && code==0 && value!=null && value.size()==2
-                && value.get("stream") instanceof String && PRIVATE_QUOTA_SEED_OK.equals(value.get("stream"))
-                && value.get("phase") instanceof String && "markdown".equals(value.get("phase"));
-        } catch(RuntimeException error) {revoked=true;}
+            success=original && code==0 && value!=null;
+            if(success) {int size=value.size();success=resultOpen() && size==2;}
+            if(success) {
+                Object stream=value.get("stream");
+                success=resultOpen() && stream instanceof String && PRIVATE_QUOTA_SEED_OK.equals(stream);
+            }
+            if(success) {
+                Object phase=value.get("phase");
+                success=resultOpen() && phase instanceof String && "markdown".equals(phase);
+            }
+        } catch(Throwable error) {revoked=true;}
         success &= !revoked;
         Bundle result=new Bundle();result.putString("stream",success?PRIVATE_QUOTA_SEED_OK:PRIVATE_QUOTA_SEED_FAILED);
         if(success)result.putString("phase","markdown");

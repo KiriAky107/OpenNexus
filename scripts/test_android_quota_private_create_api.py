@@ -71,22 +71,30 @@ public class Context {private final String name;public Context(String n){name=n;
 class PrivateCreateAPI(unittest.TestCase):
     case_names = CASES
     legacy_names = LEGACY
+    allowed_cases = CASES
+    allowed_legacy = LEGACY
+    check_class = 'ReleaseQuotaPrivateCreateCheck'
+
+    def model_sources(self):
+        return controlled_sources()
 
     def test_private_create_getters_on_actual_API36_entries(self):
         selected, legacy = tuple(self.case_names), tuple(self.legacy_names)
-        self.assertTrue(selected and set(selected) <= set(CASES) and set(legacy) <= set(LEGACY))
+        self.assertTrue(selected and set(selected) <= set(self.allowed_cases)
+                        and set(legacy) <= set(self.allowed_legacy))
+        self.assertIn(self.check_class, ('ReleaseQuotaPrivateCreateCheck', 'ReleaseQuotaPrivateResultCheck'))
         sdk = Path('C:/Users/KiriAky/AppData/Local/Android/Sdk/platforms/android-36/android.jar')
         java = Path('E:/java21/bin/java.exe')
         self.assertTrue(sdk.is_file() and java.is_file())
         sources = [ROOT/'android-runtime'/(name + '.java') for name in SOURCES]
         frozen = {p: p.read_bytes() for p in sources}
         payload = bytearray(struct.pack('>II', 0x4f4e5847, 9))
-        for name, source in controlled_sources().items():
+        for name, source in self.model_sources().items():
             for value in (name, source):
                 raw = value.encode('utf-8');payload.extend(struct.pack('>I', len(raw)));payload.extend(raw)
         command = [java, '-Xmx192m', '-XX:-UsePerfData', '-Dfile.encoding=UTF-8',
             '-Duser.language=en', '-Duser.country=US',
-            '-Donx.private_gui_check=ReleaseQuotaPrivateCreateCheck',
+            '-Donx.private_gui_check=' + self.check_class,
             '-Donx.private_create_checks=' + ','.join(selected)]
         if legacy:
             command.append('-Donx.private_gui_checks=' + ','.join(legacy))
