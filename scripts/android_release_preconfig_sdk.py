@@ -2,7 +2,8 @@
 
 This pre-child owner derives its location from the running hosted environment,
 not caller metadata. It does not construct commands, own an ADB server, attest
-SDK artifact bytes, admit a device or transfer handles to a child. Unknown opens
+SDK artifact bytes, admit a device or transfer handles to a child. An original
+host resource owner can consume its pre-child close authority. Unknown opens
 and uncertain closes retain their strong owner without automatic cleanup.
 """
 import os
@@ -22,6 +23,7 @@ _ENV = ('GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'RUNNER_OS', 'GITHUB_RUN_ID',
 class OriginalPreconfigSdk:
     def __init__(self):
         self._origin = weakref.ref(self)
+        self._handle_owner = self
         self._state = 'NEW'
         self._fds, self._edges, self._aliases, self._uncertain = [], [], [], []
         self._registered = self._releasing = self._open_unknown = False
@@ -34,6 +36,8 @@ class OriginalPreconfigSdk:
             self._state = 'FAILED'
             self._fds, self._edges, self._aliases = [], [], []
             self._registered = False
+            raise RuntimeError(_ERROR) from None
+        if self._handle_owner is not self:
             raise RuntimeError(_ERROR) from None
 
     def _reserve(self):
@@ -58,7 +62,8 @@ class OriginalPreconfigSdk:
             _LOCK.release()
 
     def _release(self):
-        if self._inflight or self._releasing or self._uncertain or self._open_unknown:
+        if (self._handle_owner is not self or self._inflight or self._releasing
+                or self._uncertain or self._open_unknown):
             return
         self._releasing = True
         try:
@@ -234,3 +239,47 @@ class OriginalPreconfigSdk:
         self._need(self._state == 'CLOSING' and not self._fds and not self._uncertain
             and not self._open_unknown and not self._registered)
         self._state = 'CLOSED'
+
+    def _consume_for_host(self, host):
+        from android_release_preconfig_host_resources import OriginalPreconfigHostResources, _OWNERS as _HOST_OWNERS
+        self._issued()
+        if (type(host) is not OriginalPreconfigHostResources
+                or not OriginalPreconfigHostResources._original(host)
+                or _HOST_OWNERS.get(id(host)) is not host or host._state != 'CONSUMING'
+                or host._sdk is not self):
+            raise RuntimeError(_ERROR) from None
+        host._stable()
+        if not _LOCK.acquire(False):
+            raise RuntimeError(_ERROR) from None
+        try:
+            if (_HOST_OWNERS.get(id(host)) is not host or self._state != 'READY'
+                    or _OWNERS.get(id(self)) is not self or self._registered is not True
+                    or self._handle_owner is not self):
+                raise RuntimeError(_ERROR) from None
+            host._stable()
+            vacant_fds, vacant_edges, vacant_aliases = [], [], []
+            host._fds, host._edges, host._aliases = self._fds, self._edges, self._aliases
+            self._handle_owner = host  # Original refs precede this authority move.
+            self._fds, self._edges, self._aliases = vacant_fds, vacant_edges, vacant_aliases
+            self._state = 'TRANSFERRED'
+            # Keep the original SDK slot reserved while the host owns its fds.
+        finally:
+            _LOCK.release()
+
+    def _retire_host_owner(self, host):
+        from android_release_preconfig_host_resources import OriginalPreconfigHostResources, _OWNERS as _HOST_OWNERS
+        if (type(host) is not OriginalPreconfigHostResources
+                or not OriginalPreconfigHostResources._original(host)
+                or _HOST_OWNERS.get(id(host)) is not host or host._state != 'CLOSING'
+                or host._sdk is not self or self._handle_owner is not host
+                or self._state != 'TRANSFERRED' or host._fds or host._uncertain):
+            raise RuntimeError(_ERROR) from None
+        if not _LOCK.acquire(False):
+            raise RuntimeError(_ERROR) from None
+        try:
+            if _OWNERS.get(id(self)) is not self or self._registered is not True:
+                raise RuntimeError(_ERROR) from None
+            del _OWNERS[id(self)]
+            self._registered = False
+        finally:
+            _LOCK.release()
