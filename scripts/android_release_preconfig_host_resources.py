@@ -3,8 +3,12 @@
 This is a descriptor owner and original clock source, not a managed ADB server,
 environment attestation, child registry, factory admission or command adapter.
 Unknown states retain both strong owners; teardown never polls or closes them.
+The optional native loopback listener is pre-child IO only. It does not attest
+a private/authenticated ADB endpoint, SDK compatibility or a command deadline.
 """
+import ctypes
 import os
+import stat
 import sys
 import threading
 import time
@@ -18,6 +22,30 @@ _OWNERS = {}
 _LOCK = threading.Lock()
 
 
+class _InetAddress(ctypes.Structure):
+    _fields_ = [('family', ctypes.c_ushort), ('port', ctypes.c_ushort),
+                ('address', ctypes.c_ubyte * 4), ('padding', ctypes.c_ubyte * 8)]
+
+
+def _native_listener_api():
+    # Called only after the actual Linux/x86-64 gate, never at construction.
+    library = ctypes.CDLL(None, use_errno=True)
+    signatures = (
+        ('socket', [ctypes.c_int, ctypes.c_int, ctypes.c_int]),
+        ('bind', [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]),
+        ('listen', [ctypes.c_int, ctypes.c_int]),
+        ('getsockname', [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]),
+        ('getsockopt', [ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                        ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]),
+    )
+    functions = []
+    for name, arguments in signatures:
+        function = getattr(library, name)
+        function.argtypes, function.restype = arguments, ctypes.c_int
+        functions.append(function)
+    return library, tuple(functions)
+
+
 class OriginalPreconfigHostResources:
     def __init__(self, sdk):
         self._origin = weakref.ref(self)
@@ -27,6 +55,11 @@ class OriginalPreconfigHostResources:
         self._fds, self._edges, self._aliases, self._uncertain = [], [], [], []
         self._sources = self._stamp = self._last = self._close = None
         self._clock_source = time.monotonic_ns  # Capture, never sample here.
+        self._listener_attempted = self._listener_open_unknown = False
+        self._listener_released = False
+        self._listener_fds = []
+        self._listener_fd = self._listener_port = None
+        self._listener_native = self._listener_snapshot = self._listener_binding = None
         self._need(type(sdk) is sdk_source.OriginalPreconfigSdk)
         self._sdk = sdk
 
@@ -150,6 +183,139 @@ class OriginalPreconfigHostResources:
             and len(self._aliases) == len(self._stamp[2])
             and all(a is b for a, b in zip(self._aliases, self._stamp[2]))
             and (self._last is None or type(self._last) is int and 0 <= self._last <= _MAX))
+        self._listener_stable()
+
+    def _listener_stable(self):
+        self._need(type(self._listener_attempted) is bool
+            and type(self._listener_open_unknown) is bool
+            and type(self._listener_released) is bool
+            and type(self._listener_fds) is list)
+        if self._state == 'BINDING':
+            self._need(self._listener_attempted is True and self._listener_snapshot is None
+                and self._listener_released is False
+                and type(self._listener_binding) is tuple and len(self._listener_binding) == 2
+                and self._listener_fds is self._listener_binding[0]
+                and self._listener_native is self._listener_binding[1]
+                and len(self._listener_fds) <= 1
+                and all(type(v) is int and v >= 0 and v not in self._fds
+                        for v in self._listener_fds))
+        elif self._listener_attempted:
+            value = self._listener_snapshot
+            self._need(type(value) is tuple and len(value) == 4
+                and self._listener_open_unknown is False
+                and self._listener_fds is value[0]
+                and type(self._listener_fd) is int and self._listener_fd >= 3
+                and self._listener_fd == value[1]
+                and (self._listener_fds == [value[1]] if not self._listener_released else
+                     self._state == 'CLOSING' and not self._listener_fds)
+                and self._listener_fd not in self._fds
+                and type(self._listener_port) is int and 1 <= self._listener_port <= 65535
+                and self._listener_port != 5037 and self._listener_port == value[2]
+                and self._listener_native is value[3]
+                and type(self._listener_binding) is tuple and len(self._listener_binding) == 2
+                and self._listener_binding[0] is self._listener_fds
+                and self._listener_binding[1] is self._listener_native)
+        else:
+            self._need(not self._listener_fds and self._listener_open_unknown is False
+                and self._listener_released is False and self._listener_binding is None
+                and self._listener_fd is None and self._listener_port is None
+                and self._listener_native is None and self._listener_snapshot is None)
+
+    def _listener_guard(self):
+        self._issued()
+        self._need(self._state == 'BINDING')
+        self._owned()
+
+    def _listener_zero(self, function, *arguments):
+        self._listener_guard()
+        value = function(*arguments)
+        self._need(type(value) is int and value == 0)
+        self._listener_guard()
+
+    def bind_loopback_listener(self):
+        """Own one actual bound/listening native socket; no server or admission.
+
+        There is no caller endpoint, raw fd getter, child, SDK command, packet
+        read/write, clock sample or retry. A later actual child owner must first
+        consume this object's close authority. This is not a full host budget.
+        """
+        self._issued()
+        self._need(self._state == 'READY')
+        self._owned()
+        self._need(self._listener_attempted is False)
+        self._listener_binding = (self._listener_fds, None)
+        self._listener_attempted, self._state = True, 'BINDING'
+        try:
+            # No environment, native library or socket operations on Windows.
+            self._need(sys.platform == 'linux' and os.name == 'posix'
+                and getattr(sys, 'byteorder', None) == 'little'
+                and ctypes.sizeof(ctypes.c_void_p) == 8 and ctypes.sizeof(_InetAddress) == 16
+                and all(callable(getattr(os, k, None)) for k in
+                        ('uname', 'getpid', 'geteuid', 'get_blocking', 'get_inheritable', 'fstat'))
+                and type(getattr(os, 'uname_result', None)) is type
+                and self._close is os.close)
+            self._listener_guard()
+            machine = os.uname()
+            self._need(type(machine) is os.uname_result and machine.machine == 'x86_64')
+            self._listener_guard()
+            for key, expected in zip(sdk_source._ENV, self._sources[3]):
+                value = os.environ.get(key)
+                self._need((type(value) is str or value is None) and value == expected)
+                self._listener_guard()
+            for function, expected in ((os.getpid, self._stamp[3]), (os.geteuid, self._stamp[4])):
+                value = function()
+                self._need(type(value) is int and value == expected)
+                self._listener_guard()
+            native = _native_listener_api()
+            self._need(type(native) is tuple and len(native) == 2
+                and type(native[1]) is tuple and len(native[1]) == 5
+                and all(callable(f) for f in native[1]))
+            self._listener_native = native
+            self._listener_binding = (self._listener_fds, native)
+            self._listener_guard()
+            create, bind, listen, name, option = native[1]
+            self._listener_open_unknown = True
+            fd = create(2, 1 | 0x80000 | 0x800, 0)  # Linux STREAM|CLOEXEC|NONBLOCK.
+            if type(fd) is int and fd >= 0 and fd not in self._fds and fd not in self._listener_fds:
+                self._listener_fds.append(fd)  # Retain BEFORE every post-call gate.
+                self._listener_fd = fd
+                self._listener_open_unknown = False
+            elif type(fd) is int and fd < 0:
+                self._listener_open_unknown = False
+            self._need(type(fd) is int and fd >= 3 and self._listener_fd == fd)
+            self._listener_guard()
+            current = os.fstat(fd)
+            self._need(type(current) is os.stat_result
+                and type(current.st_uid) is int and current.st_uid == self._stamp[4]
+                and type(current.st_mode) is int and stat.S_ISSOCK(current.st_mode))
+            self._listener_guard()
+            self._need(os.get_inheritable(fd) is False)
+            self._listener_guard()
+            self._need(os.get_blocking(fd) is False)
+            self._listener_guard()
+            address = _InetAddress()
+            address.family, address.port = 2, 0
+            address.address[:] = (127, 0, 0, 1)
+            self._listener_zero(bind, fd, ctypes.byref(address), ctypes.sizeof(address))
+            self._listener_zero(listen, fd, 8)
+            actual, length = _InetAddress(), ctypes.c_uint(ctypes.sizeof(_InetAddress))
+            self._listener_zero(name, fd, ctypes.byref(actual), ctypes.byref(length))
+            port = int.from_bytes(bytes(actual)[2:4], 'big')
+            self._need(length.value == 16 and actual.family == 2
+                and tuple(actual.address) == (127, 0, 0, 1) and not any(actual.padding)
+                and 1 <= port <= 65535 and port != 5037)
+            # Linux SO_TYPE/ACCEPTCONN/REUSEADDR/REUSEPORT, closed exact results.
+            for key, expected in ((3, 1), (30, 1), (2, 0), (15, 0)):
+                value, length = ctypes.c_int(), ctypes.c_uint(ctypes.sizeof(ctypes.c_int))
+                self._listener_zero(option, fd, 1, key, ctypes.byref(value), ctypes.byref(length))
+                self._need(length.value == 4 and value.value == expected)
+            self._listener_guard()
+            self._listener_port = port
+            self._listener_snapshot = (self._listener_fds, fd, port, self._listener_native)
+            self._state = 'READY'
+            self._owned()
+        except BaseException:
+            self._fail()
 
     def claim(self):
         self._issued()
@@ -197,6 +363,22 @@ class OriginalPreconfigHostResources:
             return
         self._owned()
         self._state = 'CLOSING'
+        if self._listener_attempted:
+            fd = self._listener_fd
+            snapshot = self._listener_snapshot
+            self._need(self._listener_open_unknown is False
+                and self._listener_fds == [fd] and fd not in self._fds)
+            self._listener_fds.pop()
+            try:
+                known = self._close(fd) is None
+            except BaseException:
+                known = False
+            if not known or self._state != 'CLOSING' or self._listener_fds:
+                self._uncertain.append(fd)
+                self._fail()
+            self._need(self._listener_snapshot is snapshot)
+            self._listener_released = True
+            self._owned()  # No later close after a changed source or listener binding.
         original_fds = self._stamp[0]
         for index, fd in enumerate(reversed(original_fds)):
             self._need(self._state == 'CLOSING'
@@ -217,6 +399,9 @@ class OriginalPreconfigHostResources:
         try:
             self._need(self._sdk._retire_host_owner(self) is None)
             self._need(self._state == 'CLOSING' and self._drop())
+            self._listener_native = self._listener_snapshot = None
+            self._listener_binding = None
+            self._listener_fd = self._listener_port = None
             self._state = 'CLOSED'
         except BaseException:
             self._fail()
