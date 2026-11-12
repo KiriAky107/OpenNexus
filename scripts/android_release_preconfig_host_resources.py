@@ -5,9 +5,12 @@ environment attestation, child registry, factory admission or command adapter.
 Unknown states retain both strong owners; teardown never polls or closes them.
 The optional native loopback listener is pre-child IO only. It does not attest
 a private/authenticated ADB endpoint, SDK compatibility or a command deadline.
+Existing auth descriptors are acquired without reading key bytes. They do not
+enforce a later child's no-generation/write policy or prevent path reopening.
 """
 import ctypes
 import os
+import re
 import stat
 import sys
 import threading
@@ -60,6 +63,9 @@ class OriginalPreconfigHostResources:
         self._listener_fds = []
         self._listener_fd = self._listener_port = None
         self._listener_native = self._listener_snapshot = self._listener_binding = None
+        self._auth_attempted = self._auth_open_unknown = self._auth_released = False
+        self._auth_fds, self._auth_edges = [], []
+        self._auth_home = self._auth_binding = self._auth_snapshot = None
         self._need(type(sdk) is sdk_source.OriginalPreconfigSdk)
         self._sdk = sdk
 
@@ -184,6 +190,143 @@ class OriginalPreconfigHostResources:
             and all(a is b for a, b in zip(self._aliases, self._stamp[2]))
             and (self._last is None or type(self._last) is int and 0 <= self._last <= _MAX))
         self._listener_stable()
+        self._auth_stable()
+
+    def _auth_stable(self):
+        self._need(type(self._auth_attempted) is bool and type(self._auth_open_unknown) is bool
+            and type(self._auth_released) is bool and type(self._auth_fds) is list
+            and type(self._auth_edges) is list)
+        if self._auth_attempted:
+            self._need(type(self._auth_binding) is tuple and len(self._auth_binding) == 3
+                and self._auth_fds is self._auth_binding[0]
+                and self._auth_edges is self._auth_binding[1]
+                and self._auth_home is self._auth_binding[2]
+                and len(self._auth_fds) <= 40
+                and all(type(fd) is int and fd >= 0 and fd not in self._fds
+                    and fd not in self._listener_fds for fd in self._auth_fds)
+                and len(set(self._auth_fds)) == len(self._auth_fds))
+            if self._state == 'AUTH_PINNING':
+                self._need(self._auth_snapshot is None and self._auth_released is False)
+            else:
+                value = self._auth_snapshot
+                self._need(type(value) is tuple and len(value) == 2
+                    and type(value[0]) is tuple and type(value[1]) is tuple
+                    and self._auth_open_unknown is False
+                    and len(self._auth_edges) == len(value[1])
+                    and all(a is b for a, b in zip(self._auth_edges, value[1]))
+                    and (tuple(self._auth_fds) == value[0] if self._state != 'CLOSING' else
+                        tuple(self._auth_fds) == value[0][:len(self._auth_fds)])
+                    and (self._auth_released is False or self._state == 'CLOSING'
+                        and not self._auth_fds))
+        else:
+            self._need(self._auth_open_unknown is False and self._auth_released is False
+                and not self._auth_fds and not self._auth_edges and self._auth_home is None
+                and self._auth_binding is None and self._auth_snapshot is None)
+
+    def _auth_guard(self):
+        self._issued()
+        self._need(self._state == 'AUTH_PINNING')
+        self._owned()
+
+    def _auth_step(self, function, *arguments, **keywords):
+        self._auth_guard()
+        value = function(*arguments, **keywords)
+        self._auth_guard()
+        return value
+
+    def _auth_identity(self, value, kind):
+        self._need(type(value) is os.stat_result)
+        identity = (value.st_dev, value.st_ino, value.st_uid, value.st_mode,
+                    value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        self._need(all(type(v) is int and v >= 0 for v in identity)
+            and value.st_nlink > 0 and value.st_uid in (0, self._stamp[4])
+            and not value.st_mode & 0o7022)
+        if kind == 'key':
+            self._need(stat.S_ISREG(value.st_mode) and value.st_uid == self._stamp[4]
+                and value.st_mode & 0o7777 == 0o600 and value.st_nlink == 1
+                and 1 <= value.st_size <= 65536)
+        else:
+            self._need(stat.S_ISDIR(value.st_mode))
+            if kind in ('home', 'android'):
+                self._need(value.st_uid == self._stamp[4])
+            if kind == 'android':
+                self._need(value.st_mode & 0o7777 == 0o700)
+        return identity
+
+    def _auth_open(self, name, parent, kind):
+        keywords = {} if parent is None else {'dir_fd': parent}
+        identity = self._auth_identity(self._auth_step(os.stat, name,
+            follow_symlinks=False, **keywords), kind)
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+        flags |= os.O_NONBLOCK if kind == 'key' else os.O_DIRECTORY
+        self._auth_guard()
+        self._auth_open_unknown = True
+        fd = os.open(name, flags, **keywords)
+        if (type(fd) is int and fd >= 0 and fd not in self._fds
+                and fd not in self._listener_fds and fd not in self._auth_fds):
+            self._auth_fds.append(fd)  # Retain BEFORE post-open phase/owner checks.
+            self._auth_open_unknown = False
+        self._need(type(fd) is int and fd >= 3 and self._auth_open_unknown is False
+            and fd in self._auth_fds)
+        self._auth_guard()
+        actual = self._auth_identity(self._auth_step(os.fstat, fd), kind)
+        self._need(actual == identity and self._auth_step(os.get_inheritable, fd) is False
+            and all(edge[3][:2] != actual[:2] for edge in self._auth_edges))
+        self._auth_edges.append((parent, name, fd, identity, kind))
+        return fd
+
+    def pin_existing_auth(self):
+        """Acquire existing auth path descriptors without reading any key bytes.
+
+        This does not exclude later SDK mkdir/key generation, writes or path
+        reopens, prove key validity/authorization, or admit an executable child.
+        There is no caller path, fallback HOME, file creation or clock sample.
+        """
+        self._issued()
+        self._need(self._state == 'READY')
+        self._owned()
+        self._need(self._auth_attempted is False)
+        self._auth_binding = (self._auth_fds, self._auth_edges, None)
+        self._auth_attempted, self._state = True, 'AUTH_PINNING'
+        try:
+            self._need(sys.platform == 'linux' and os.name == 'posix' and os is sdk_source.os
+                and self._close is os.close
+                and all(type(getattr(os, k, None)) is int and getattr(os, k) > 0
+                    for k in ('O_NOFOLLOW', 'O_CLOEXEC', 'O_DIRECTORY', 'O_NONBLOCK'))
+                and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
+                and os.stat in os.supports_follow_symlinks)
+            for key, expected in zip(sdk_source._ENV, self._sources[3]):
+                value = self._auth_step(os.environ.get, key)
+                self._need((type(value) is str or value is None) and value == expected)
+            for function, expected in ((os.getpid, self._stamp[3]), (os.geteuid, self._stamp[4])):
+                value = self._auth_step(function)
+                self._need(type(value) is int and value == expected)
+            home = self._auth_step(os.environ.get, 'HOME')
+            self._need(type(home) is str and 1 < len(home) <= 512
+                and home.startswith('/') and not home.endswith('/'))
+            parts = home[1:].split('/')
+            self._need(1 <= len(parts) <= 32 and all(re.fullmatch(r'[A-Za-z0-9_.-]{1,96}', x)
+                is not None and x not in ('.', '..') for x in parts))
+            self._auth_home = home
+            self._auth_binding = (self._auth_fds, self._auth_edges, home)
+            parent = self._auth_open('/', None, 'directory')
+            for index, name in enumerate(parts):
+                parent = self._auth_open(name, parent, 'home' if index == len(parts) - 1 else 'directory')
+            parent = self._auth_open('.android', parent, 'android')
+            self._auth_open('adbkey', parent, 'key')
+            for parent, name, fd, identity, kind in self._auth_edges:
+                keywords = {} if parent is None else {'dir_fd': parent}
+                self._need(self._auth_identity(self._auth_step(os.stat, name,
+                    follow_symlinks=False, **keywords), kind) == identity
+                    and self._auth_identity(self._auth_step(os.fstat, fd), kind) == identity
+                    and self._auth_step(os.get_inheritable, fd) is False)
+            value = self._auth_step(os.environ.get, 'HOME')
+            self._need(type(value) is str and value == home)
+            self._auth_snapshot = (tuple(self._auth_fds), tuple(self._auth_edges))
+            self._state = 'READY'
+            self._owned()
+        except BaseException:
+            self._fail()
 
     def _listener_stable(self):
         self._need(type(self._listener_attempted) is bool
@@ -379,6 +522,23 @@ class OriginalPreconfigHostResources:
             self._need(self._listener_snapshot is snapshot)
             self._listener_released = True
             self._owned()  # No later close after a changed source or listener binding.
+        if self._auth_attempted:
+            snapshot = self._auth_snapshot
+            for fd in reversed(snapshot[0]):
+                self._need(self._auth_snapshot is snapshot and self._state == 'CLOSING')
+                self._owned()
+                self._need(self._state == 'CLOSING' and self._auth_fds[-1] == fd)
+                self._auth_fds.pop()
+                try:
+                    known = self._close(fd) is None
+                except BaseException:
+                    known = False
+                if not known or self._state != 'CLOSING':
+                    self._uncertain.append(fd)
+                    self._fail()
+            self._need(self._auth_snapshot is snapshot)
+            self._auth_released = True
+            self._owned()
         original_fds = self._stamp[0]
         for index, fd in enumerate(reversed(original_fds)):
             self._need(self._state == 'CLOSING'
@@ -402,6 +562,7 @@ class OriginalPreconfigHostResources:
             self._listener_native = self._listener_snapshot = None
             self._listener_binding = None
             self._listener_fd = self._listener_port = None
+            self._auth_home = self._auth_binding = self._auth_snapshot = None
             self._state = 'CLOSED'
         except BaseException:
             self._fail()
