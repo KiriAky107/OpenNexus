@@ -215,9 +215,13 @@ class PreparedPlatformTools:
         self._created = updated
 
     def prepare(self):
-        require(self._state == 'NEW' and sys.platform == 'linux' and os.uname().machine == 'x86_64'
-                and sys.version_info >= (3, 13) and hasattr(os, 'POSIX_SPAWN_CLOSEFROM')
-                and callable(getattr(os, 'pidfd_open', None)))
+        self._phase = 'HOST_CAPABILITIES'
+        self._capabilities = dict(linux=sys.platform == 'linux',
+            x86_64=sys.platform == 'linux' and os.uname().machine == 'x86_64',
+            python313=sys.version_info >= (3, 13),
+            native_closefrom=hasattr(os, 'POSIX_SPAWN_CLOSEFROM'),
+            pidfd=callable(getattr(os, 'pidfd_open', None)))
+        require(self._state == 'NEW' and all(self._capabilities.values()))
         require(_LOCK.acquire(False))
         try:
             require(not _OWNERS)
@@ -225,27 +229,34 @@ class PreparedPlatformTools:
         finally:
             _LOCK.release()
         self._state = 'PREPARING'
+        self._phase = 'HOST_ENVIRONMENT'
         env = tuple(os.environ.get(k) for k in ('GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'RUNNER_OS',
                     'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'GITHUB_WORKSPACE',
                     'ANDROID_HOME', 'ANDROID_SDK_ROOT'))
         require(env[:3] == ('true', 'github-hosted', 'Linux')
                 and re.fullmatch(r'[1-9][0-9]{0,19}', env[3] or '') is not None
                 and re.fullmatch(r'[1-9][0-9]{0,3}', env[4] or '') is not None
-                and re.fullmatch(r'[0-9a-f]{40}', env[5] or '') is not None)
+                and re.fullmatch(r'[0-9a-f]{40}', env[5] or '') is not None
+                and type(env[6]) is str and type(env[7]) is str)
         workspace, sdk = Path(env[6]), Path(env[7])
+        self._phase = 'HOST_SOURCE_PATHS'
         for path in (workspace, sdk):
-            require(path.is_absolute() and path.resolve() == path and not path.is_symlink())
+            require(path.is_absolute() and path.is_dir() and path.resolve() == path and not path.is_symlink())
             for parent in (path, *path.parents):
-                require(not parent.is_symlink() and not parent.stat().st_mode & 0o002)
+                require(not parent.is_symlink())
         require(env[8] is None or env[8] == env[7])
         boot = Path('/proc/sys/kernel/random/boot_id').read_text('ascii').strip()
         require(re.fullmatch(r'[0-9a-f-]{36}', boot) is not None)
         self._environment = env
         self._owner = dict(run=env[3], attempt=env[4], source=env[5], uid=os.geteuid(),
                            boot_id=boot, parent_pid=os.getpid())
-        parent = workspace / '.build'
-        require(parent.is_dir() and parent.resolve() == parent and not parent.is_symlink())
-        self._root = parent / ('platform-tools-prepare-' + env[3] + '-' + env[4])
+        self._phase = 'OWNED_HOME_PARENT'
+        parent = Path(os.environ.get('HOME', ''))
+        require(parent.is_absolute() and parent.is_dir() and parent.resolve() == parent
+                and parent.stat().st_uid == os.geteuid())
+        for path in (parent, *parent.parents):
+            require(not path.is_symlink() and not path.stat().st_mode & 0o7022)
+        self._root = parent / ('opennexus-platform-tools-prepare-' + env[3] + '-' + env[4])
         self._directory(self._root)
         self._phase = 'SOURCE_PROVENANCE'
         self._source = verify_source(fetch(SOURCE_TAG, 8192), fetch(SOURCE_COMMANDLINE, 120000))
@@ -392,7 +403,7 @@ class PreparedPlatformTools:
                 if parent == path.parent and stat.S_ISDIR(value[2]):
                     self._created[i] = (parent, identity(parent.lstat()))
         self._created.clear()
-        require(not self._root.exists())
+        require(self._root is None or not self._root.exists())
         self._state = 'CLOSED'
         require(_LOCK.acquire(False))
         try:
@@ -427,6 +438,8 @@ def controlled_verify():
     except BaseException:
         proof['failure'] = ERROR  # No private exception text or arbitrary SDK streams.
         proof['failure_stage'] = task._phase
+        if hasattr(task, '_capabilities'):
+            proof['host_capabilities'] = task._capabilities
         proof['child_unknown'] = task._child_unknown
     finally:
         try:
