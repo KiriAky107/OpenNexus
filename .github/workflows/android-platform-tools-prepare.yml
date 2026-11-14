@@ -10,6 +10,7 @@ on:
       - scripts/android_release_preconfig_host_resources.py
       - scripts/test_android_release_platform_tools.py
       - scripts/test_android_release_preconfig_prepared_host.py
+      - scripts/test_android_release_version_landlock.py
 
 permissions:
   contents: read
@@ -31,8 +32,8 @@ jobs:
           python-version: '3.13'
       - name: Check the affected prepare guards in RAM
         working-directory: scripts
-        run: python -B -m unittest test_android_release_platform_tools test_android_release_preconfig_prepared_host
-      - name: Bind prepared SDK and host close ownership, probe version once, then remove owned files
+        run: python -B -m unittest test_android_release_platform_tools test_android_release_preconfig_prepared_host test_android_release_version_landlock
+      - name: Confine one version child, bind host close ownership, then remove owned files
         run: |
           mkdir -p .build
           python -B scripts/android_release_platform_tools.py verify

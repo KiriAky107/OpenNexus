@@ -4,6 +4,8 @@ The vendor release tag is source provenance, not a reproducible-build attestatio
 The one version probe cannot admit a managed server, authentication or Native work.
 """
 import base64
+import ctypes
+import errno
 import hashlib
 import io
 import json
@@ -40,11 +42,72 @@ FILES = {
 _OWNERS = {}
 _LOCK = threading.Lock()
 ERROR = 'SIGNED_PLATFORM_TOOLS_PREPARE_UNAVAILABLE'
+# Linux v6.10 UAPI: WRITE_FILE, REMOVE/MAKE/REFER/TRUNCATE and IOCTL_DEV.
+# Reads/reopens, chmod/chown/xattrs and general command behavior are NOT covered.
+# https://docs.kernel.org/userspace-api/landlock.html
+_LANDLOCK_WRITES = (1 << 16) - 1 - (1 << 0) - (1 << 2) - (1 << 3)
 
 
 def require(value):
     if not value:
         raise RuntimeError(ERROR) from None
+
+
+def _landlock_api():
+    """Read-only ABI query. Never restrict the preparing parent process."""
+    require(sys.platform == 'linux' and os.uname().machine == 'x86_64'
+            and sys.version_info >= (3, 13) and os.execve in os.supports_fd)
+    library = ctypes.CDLL(None, use_errno=True)
+    library.syscall.restype = ctypes.c_long
+    library.syscall.argtypes = [ctypes.c_long]
+    library.prctl.restype = ctypes.c_int
+    library.prctl.argtypes = [ctypes.c_int] + [ctypes.c_ulong] * 4
+    library.fcntl.restype = ctypes.c_int
+    library.fcntl.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    abi = library.syscall(444, ctypes.c_void_p(), ctypes.c_size_t(0), ctypes.c_uint(1))
+    require(type(abi) is int and 5 <= abi <= 64)
+    return library, abi
+
+
+def _confined_version_child():
+    """Fixed private child entry: fd3 is adb, fd4 was this source; no caller argv."""
+    library, _ = _landlock_api()
+    require(os.geteuid() != 0)
+    # Close Python's script/bootstrap handles before exec. Preserve only readonly
+    # stdin and adb plus the two owned output pipes; no writable file capability.
+    require(library.syscall(436, ctypes.c_uint(4), ctypes.c_uint(0xffffffff), ctypes.c_uint(0)) == 0)
+    require(stat.S_ISCHR(os.fstat(0).st_mode) and os.readlink('/proc/self/fd/0') == '/dev/null')
+    for fd in (0, 3):
+        flags = library.fcntl(fd, 3, 0)  # F_GETFL
+        require(type(flags) is int and flags >= 0 and flags & os.O_ACCMODE == os.O_RDONLY)
+    for fd in (1, 2):
+        value = os.fstat(fd)
+        require(stat.S_ISFIFO(value.st_mode) and value.st_uid == os.geteuid()
+                and stat.S_IMODE(value.st_mode) == 0o600)
+    value = os.fstat(3)
+    require(stat.S_ISREG(value.st_mode) and value.st_uid == os.geteuid()
+            and value.st_nlink == 1 and value.st_size == ADB_BYTES)
+    sdk_path = Path(os.readlink('/proc/self/fd/3'))
+    require(sdk_path.is_absolute() and sdk_path.name == 'adb'
+            and sdk_path.parent.name == 'platform-tools')
+    rules = ctypes.c_uint64(_LANDLOCK_WRITES)
+    rule_fd = library.syscall(444, ctypes.byref(rules), ctypes.c_size_t(8), ctypes.c_uint(0))
+    require(type(rule_fd) is int and rule_fd >= 4)
+    require(library.prctl(38, 1, 0, 0, 0) == 0 and library.prctl(39, 0, 0, 0, 0) == 1)
+    require(library.syscall(446, ctypes.c_int(rule_fd), ctypes.c_uint(0)) == 0)
+    require(os.close(rule_fd) is None)
+    # One declared owned destination, absent before spawn. A successful create
+    # aborts without SDK exec; the parent retains its unknown/partial lifetime.
+    try:
+        os.open(sdk_path.parent / '.landlock-write-denial-probe',
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except PermissionError as error:
+        require(type(error.errno) is int and error.errno == errno.EACCES)
+    else:
+        raise RuntimeError(ERROR)
+    os.set_inheritable(3, False)
+    os.execve(3, ('/proc/self/fd/3', 'version'), os.environ.copy())
+    raise RuntimeError(ERROR)  # An exec that returned is not SDK completion.
 
 
 def closed_json(raw):
@@ -154,6 +217,7 @@ class PreparedPlatformTools:
         self._child_unknown = False
         self._sdk = None
         self._host = self._host_binding = self._host_stamp = None
+        self._probe_programs = []
         self._phase = 'NEW'
 
     def _original(self):
@@ -236,6 +300,8 @@ class PreparedPlatformTools:
             native_closefrom=hasattr(os, 'POSIX_SPAWN_CLOSEFROM'),
             pidfd=callable(getattr(os, 'pidfd_open', None)))
         require(self._state == 'NEW' and all(self._capabilities.values()))
+        self._phase = 'LANDLOCK_ABI_GATE'
+        _, self._landlock_abi = _landlock_api()  # Unsupported before prepare IO.
         require(_LOCK.acquire(False))
         try:
             require(not _OWNERS)
@@ -350,6 +416,29 @@ class PreparedPlatformTools:
         self.verify_sdk(self._sdk)
         require(self._pid is None and not self._child_unknown)
         self._phase = 'VERSION_PROBE'
+        start = last = time.monotonic_ns()
+        _, abi = _landlock_api()
+        require(abi == self._landlock_abi)
+        programs = []
+        for name in (sys.executable, __file__):
+            path = Path(name).resolve(strict=True)
+            require(path.is_absolute() and not path.is_symlink())
+            program_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            self._fds.append(program_fd)
+            require(type(program_fd) is int and program_fd >= 3
+                    and os.get_inheritable(program_fd) is False)
+            value = os.fstat(program_fd)
+            require(stat.S_ISREG(value.st_mode) and value.st_nlink == 1
+                    and value.st_uid in (0, os.geteuid()) and 1 <= value.st_size <= 64 * 1024 * 1024
+                    and identity(path.lstat()) == identity(value))
+            raw = os.pread(program_fd, value.st_size + 1, 0)
+            require(len(raw) == value.st_size and identity(os.fstat(program_fd)) == identity(value))
+            programs.append((program_fd, path, identity(value), hashlib.sha256(raw).hexdigest()))
+        require(len({v[0] for v in programs} | {self._binding[1]}) == 3
+                and programs[0][2][:2] != programs[1][2][:2])
+        self._probe_programs = programs
+        denial = self._root / 'platform-tools/.landlock-write-denial-probe'
+        require(not denial.exists() and not denial.is_symlink())
         null = os.open('/dev/null', os.O_RDONLY | os.O_CLOEXEC)
         self._fds.append(null)
         out_r, out_w = os.pipe2(os.O_CLOEXEC)
@@ -363,12 +452,29 @@ class PreparedPlatformTools:
         os.set_blocking(out_r, False)
         os.set_blocking(err_r, False)
         fd = self._binding[1]
-        executable = '/proc/' + str(os.getpid()) + '/fd/' + str(fd)
+        executable = '/proc/' + str(os.getpid()) + '/fd/' + str(programs[0][0])
         actions = [(os.POSIX_SPAWN_DUP2, null, 0), (os.POSIX_SPAWN_DUP2, out_w, 1),
-                   (os.POSIX_SPAWN_DUP2, err_w, 2), (os.POSIX_SPAWN_CLOSEFROM, 3)]
-        start = last = time.monotonic_ns()
+                   (os.POSIX_SPAWN_DUP2, err_w, 2), (os.POSIX_SPAWN_DUP2, fd, 3),
+                   (os.POSIX_SPAWN_DUP2, programs[1][0], 4), (os.POSIX_SPAWN_CLOSEFROM, 5)]
+        self.verify_sdk(self._sdk)
+        for program_fd, path, before, digest in programs:
+            require(identity(os.fstat(program_fd)) == before == identity(path.lstat())
+                    and hashlib.sha256(os.pread(program_fd, before[5] + 1, 0)).hexdigest() == digest)
+        home = os.environ.get('HOME')
+        library = programs[0][1].parent.parent / 'lib'
+        require(type(home) is str and Path(home) == self._root.parent
+                and library.is_dir() and library.resolve() == library and not library.is_symlink())
+        # Keep the actual HOME; do not inherit LD_PRELOAD/AUDIT, Python hooks,
+        # credentials or unrelated SDK/server variables into this version child.
+        environment = {'HOME': home, 'LANG': 'C', 'LC_ALL': 'C',
+                       'PATH': os.defpath, 'LD_LIBRARY_PATH': str(library)}
+        now = time.monotonic_ns()
+        require(last <= now <= start + 5_000_000_000)
+        last = now
         self._child_unknown = True  # Native exception cannot prove that no child was created.
-        pid = os.posix_spawn(executable, (executable, 'version'), os.environ.copy(), file_actions=actions)
+        pid = os.posix_spawn(executable,
+            (executable, '-I', '-B', '-S', '/proc/self/fd/4', '_confined_version_child'),
+            environment, file_actions=actions)
         self._pid = pid  # Strong owner slot before any post-spawn operation.
         require(type(pid) is int and pid > 0)
         self._pidfd = os.pidfd_open(pid, 0)
@@ -389,6 +495,8 @@ class PreparedPlatformTools:
             require(value == (0, 0) and attempt < 100)
             time.sleep(min(.05, (start + 5_000_000_000 - now) / 1_000_000_000))
         require(not self._child_unknown)
+        for program_fd, _, _, _ in programs:
+            self._close_fd(program_fd)
         out, err = os.read(out_r, 4097), os.read(err_r, 513)
         require(len(out) <= 4096 and err == b'' and os.read(out_r, 1) == b'')
         lines = out.splitlines()
@@ -397,8 +505,16 @@ class PreparedPlatformTools:
                 and lines[2] == ('Installed as ' + str(self._root / 'platform-tools/adb')).encode()
                 and lines[3].startswith(b'Running on Linux ') and len(lines[3]) <= 256)
         self.verify_sdk(self._sdk)
+        require(not denial.exists() and not denial.is_symlink())
+        now = time.monotonic_ns()
+        require(last <= now <= start + 5_000_000_000)
         self._probe = dict(exit_code=0, publisher_build_id=BUILD, bounded_polls=attempt + 1,
-                           stdout_bytes=len(out), stderr_bytes=0, actual_linux_version_probe=True)
+            stdout_bytes=len(out), stderr_bytes=0, actual_linux_version_probe=True,
+            actual_version_landlock_write_actions_enforced=True, landlock_abi=abi,
+            handled_access_fs=_LANDLOCK_WRITES, inherited_writable_regular_files=False,
+            isolated_version_environment=True,
+            source_script_sha256=programs[1][3], interpreter_sha256=programs[0][3],
+            general_no_generation_reopen_endpoint_or_factory_admission=False)
 
     def _consume_for_host(self, host):
         from android_release_preconfig_host_resources import OriginalPreconfigHostResources, _OWNERS as owners
@@ -588,6 +704,11 @@ def controlled_verify():
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['_confined_version_child']:
+        try:
+            _confined_version_child()
+        except BaseException:
+            os._exit(91)  # No private exception or wrapper stderr export.
     require(sys.argv[1:] == ['verify'])
     # SDK verification imports this canonical module to check exact owner types.
     # Construct its owner here, rather than a distinct __main__ class instance.
