@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+from pathlib import Path
 import stat
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,25 @@ import android_release_preconfig_sdk as sdk_source
 
 
 class PlatformToolsGuards(unittest.TestCase):
+    def test_script_entry_uses_same_module_as_sdk_owner_type_check(self):
+        code = compile(Path(subject.__file__).read_bytes(), subject.__file__, 'exec')
+
+        class ReachedCanonicalOwner(Exception):
+            pass
+
+        def deny(*args, **kwargs):
+            raise AssertionError('unexpected IO before canonical controller')
+
+        with patch.object(subject, 'controlled_verify', side_effect=ReachedCanonicalOwner) as run, \
+                patch.object(subject.sys, 'argv', [subject.__file__, 'verify']), \
+                patch.object(subject.os, 'open', deny), patch.object(Path, 'open', deny), \
+                patch.object(Path, 'resolve', deny), patch.object(Path, 'mkdir', deny), \
+                patch.object(subject.time, 'monotonic_ns', deny), \
+                patch.object(subject.urllib.request, 'build_opener', deny):
+            with self.assertRaises(ReachedCanonicalOwner):
+                exec(code, {'__name__': '__main__'})
+        run.assert_called_once_with()
+
     def source(self):
         raw = (b'!strcmp(argv[0], "--version") || !strcmp(argv[0], "version")\n'
                b'fprintf(stdout, "%s", adb_version().c_str());\n        return 0;')

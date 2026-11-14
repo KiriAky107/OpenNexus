@@ -472,4 +472,7 @@ def controlled_verify():
 
 if __name__ == '__main__':
     require(sys.argv[1:] == ['verify'])
-    raise SystemExit(controlled_verify())
+    # SDK verification imports this canonical module to check exact owner types.
+    # Construct its owner here, rather than a distinct __main__ class instance.
+    from android_release_platform_tools import controlled_verify as verify
+    raise SystemExit(verify())
