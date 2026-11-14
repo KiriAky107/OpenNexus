@@ -3,6 +3,8 @@
 This is a descriptor owner and original clock source, not a managed ADB server,
 environment attestation, child registry, factory admission or command adapter.
 Unknown states retain both strong owners; teardown never polls or closes them.
+An optional actual prepare source shares the SDK authority move and remains
+reserved until known pre-child descriptor/file cleanup and owner retirement.
 The optional native loopback listener is pre-child IO only. It does not attest
 a private/authenticated ADB endpoint, SDK compatibility or a command deadline.
 Existing auth descriptors are acquired without reading key bytes. They do not
@@ -55,6 +57,8 @@ class OriginalPreconfigHostResources:
         self._handle_owner = self
         self._state, self._registered = 'NEW', False
         self._sdk = None
+        self._platform_tools_source = self._platform_tools_binding = None
+        self._platform_tools_consuming = False
         self._fds, self._edges, self._aliases, self._uncertain = [], [], [], []
         self._sources = self._stamp = self._last = self._close = None
         self._clock_source = time.monotonic_ns  # Capture, never sample here.
@@ -108,7 +112,8 @@ class OriginalPreconfigHostResources:
     def _fail(self):
         self._state = 'FAILED'
         captured = type(self._sources) is tuple and len(self._sources) == 5 and self._fds is self._sources[0]
-        if not captured and (self._sdk is None or getattr(self._sdk, '_handle_owner', None) is not self):
+        if not captured and self._platform_tools_consuming is not True and (
+                self._sdk is None or getattr(self._sdk, '_handle_owner', None) is not self):
             self._drop()  # Never close descriptors still owned by the SDK source.
         # Once consumed, retain original known/uncertain handles without cleanup.
         raise RuntimeError(_ERROR) from None
@@ -152,6 +157,12 @@ class OriginalPreconfigHostResources:
     def _snapshot(self):
         self._ready_source()
         sdk = self._sdk
+        prepared = sdk._platform_tools_source
+        if prepared is not None:
+            from android_release_platform_tools import PreparedPlatformTools
+            self._need(type(prepared) is PreparedPlatformTools)
+            prepared._original()
+        self._platform_tools_source = prepared
         self._sources = (sdk._fds, sdk._edges, sdk._aliases, sdk._context, sdk._sdk)
         self._stamp = (tuple(sdk._fds), tuple(sdk._edges), tuple(sdk._aliases), sdk._parent_pid, sdk._uid)
 
@@ -163,6 +174,7 @@ class OriginalPreconfigHostResources:
             and sdk._fds is self._sources[0] and sdk._edges is self._sources[1]
             and sdk._aliases is self._sources[2] and sdk._context is self._sources[3]
             and sdk._sdk is self._sources[4]
+            and sdk._platform_tools_source is self._platform_tools_source
             and (tuple(sdk._fds), tuple(sdk._edges), tuple(sdk._aliases),
                 sdk._parent_pid, sdk._uid) == self._stamp)
 
@@ -191,6 +203,19 @@ class OriginalPreconfigHostResources:
             and (self._last is None or type(self._last) is int and 0 <= self._last <= _MAX))
         self._listener_stable()
         self._auth_stable()
+        self._prepared_owned()
+
+    def _prepared_owned(self):
+        self._need(self._sdk._platform_tools_source is self._platform_tools_source)
+        if self._platform_tools_source is not None:
+            from android_release_platform_tools import PreparedPlatformTools
+            self._need(type(self._platform_tools_source) is PreparedPlatformTools)
+            try:
+                self._platform_tools_source._verify_host(self)
+            except BaseException:
+                self._fail()
+        else:
+            self._need(self._platform_tools_binding is None and self._platform_tools_consuming is False)
 
     def _auth_stable(self):
         self._need(type(self._auth_attempted) is bool and type(self._auth_open_unknown) is bool
@@ -541,6 +566,7 @@ class OriginalPreconfigHostResources:
             self._owned()
         original_fds = self._stamp[0]
         for index, fd in enumerate(reversed(original_fds)):
+            self._prepared_owned()
             self._need(self._state == 'CLOSING'
                 and self._sdk._handle_owner is self and self._registered is True
                 and _OWNERS.get(id(self)) is self
@@ -555,9 +581,14 @@ class OriginalPreconfigHostResources:
             if not known or self._state != 'CLOSING':
                 self._uncertain.append(fd)
                 self._fail()
+            self._prepared_owned()
         self._need(all(type(v) is int for v in self._fds) and not self._fds)
         try:
+            if self._platform_tools_source is not None:
+                self._need(self._platform_tools_source._close_from_host(self) is None)
             self._need(self._sdk._retire_host_owner(self) is None)
+            if self._platform_tools_source is not None:
+                self._need(self._platform_tools_source._retire_from_host(self) is None)
             self._need(self._state == 'CLOSING' and self._drop())
             self._listener_native = self._listener_snapshot = None
             self._listener_binding = None

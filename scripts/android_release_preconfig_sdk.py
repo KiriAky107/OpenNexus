@@ -264,6 +264,10 @@ class OriginalPreconfigSdk:
                     or self._handle_owner is not self):
                 raise RuntimeError(_ERROR) from None
             host._stable()
+            if self._platform_tools_source is not None:
+                host._platform_tools_consuming = True
+                self._platform_tools_source._consume_for_host(host)
+                host._stable()
             vacant_fds, vacant_edges, vacant_aliases = [], [], []
             host._fds, host._edges, host._aliases = self._fds, self._edges, self._aliases
             self._handle_owner = host  # Original refs precede this authority move.

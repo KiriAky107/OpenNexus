@@ -153,6 +153,7 @@ class PreparedPlatformTools:
         self._pid = self._pidfd = None
         self._child_unknown = False
         self._sdk = None
+        self._host = self._host_binding = self._host_stamp = None
         self._phase = 'NEW'
 
     def _original(self):
@@ -163,7 +164,7 @@ class PreparedPlatformTools:
     def _close_fd(self, fd):
         self._fds.remove(fd)  # Never retry a possibly reused descriptor number.
         try:
-            require(os.close(fd) is None)
+            require(self._cleanup_call(os.close, fd) is None)
         except BaseException:
             self._close_uncertain.append(fd)
             raise RuntimeError(ERROR) from None
@@ -175,8 +176,21 @@ class PreparedPlatformTools:
         require(tuple(os.environ.get(k) for k in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA'))
                 == (self._owner['run'], self._owner['attempt'], self._owner['source']))
         for path, before in self._created:
-            require(not path.is_symlink() and path.resolve() == path
-                    and identity(path.lstat()) == before)
+            require(not self._cleanup_call(path.is_symlink)
+                    and self._cleanup_call(path.resolve) == path
+                    and identity(self._cleanup_call(path.lstat)) == before)
+
+    def _cleanup_call(self, function, *args):
+        # These are this owner's concrete file operations, never a caller port.
+        transferred = self._host is not None and self._sdk._handle_owner is self._host
+        if transferred:
+            self._host_origin(self._host)
+            require(self._state == 'CLOSING' and self._host._state == 'CLOSING')
+        value = function(*args)
+        if transferred:
+            self._host_origin(self._host)
+            require(self._state == 'CLOSING' and self._host._state == 'CLOSING')
+        return value
 
     def _directory(self, path):
         require(not path.exists() and not path.is_symlink() and path.parent.resolve() == path.parent)
@@ -205,9 +219,9 @@ class PreparedPlatformTools:
         updated = []
         for path, before in self._created:
             if stat.S_ISDIR(before[2]):
-                current = identity(path.lstat())
-                require(current[:4] == before[:4] and not path.is_symlink()
-                        and {x.name for x in path.iterdir()} ==
+                current = identity(self._cleanup_call(path.lstat))
+                require(current[:4] == before[:4] and not self._cleanup_call(path.is_symlink)
+                        and {x.name for x in self._cleanup_call(lambda: tuple(path.iterdir()))} ==
                             {p.name for p, _ in self._created if p.parent == path})
                 updated.append((path, current))
             else:
@@ -320,15 +334,19 @@ class PreparedPlatformTools:
         self.verify_sdk(sdk)
 
     def verify_sdk(self, sdk):
-        self._guard()
-        require(self._state == 'BOUND' and self._binding is not None
+        self._original()
+        require(sdk is self._sdk and sdk._handle_owner is sdk
+                and sdk._state in ('READY', 'VERIFYING')
+                and self._state == 'BOUND' and self._binding is not None
                 and sdk is self._sdk and self._binding[0] is sdk
                 and sdk._platform_tools_source is self and sdk._sdk == str(self._root))
+        self._guard()
         _, fd, before = self._binding
         require(sdk_identity(os.fstat(fd)) == before and os.get_inheritable(fd) is False)
         require(hashlib.sha256(os.pread(fd, ADB_BYTES + 1, 0)).hexdigest() == ADB_SHA256)
 
     def probe_version_once(self):
+        require(self._host is None)
         self.verify_sdk(self._sdk)
         require(self._pid is None and not self._child_unknown)
         self._phase = 'VERSION_PROBE'
@@ -382,28 +400,99 @@ class PreparedPlatformTools:
         self._probe = dict(exit_code=0, publisher_build_id=BUILD, bounded_polls=attempt + 1,
                            stdout_bytes=len(out), stderr_bytes=0, actual_linux_version_probe=True)
 
+    def _consume_for_host(self, host):
+        from android_release_preconfig_host_resources import OriginalPreconfigHostResources, _OWNERS as owners
+        self._original()
+        require(type(host) is OriginalPreconfigHostResources and host._original(host)
+                and owners.get(id(host)) is host and host._registered is True
+                and host._handle_owner is host and host._state == 'CONSUMING'
+                and host._sdk is self._sdk and host._platform_tools_source is self
+                and host._platform_tools_binding is None and self._host is None
+                and not self._child_unknown and not self._close_uncertain)
+        self._host = host
+        try:
+            host._stable()
+            self.verify_sdk(self._sdk)  # Actual held adb fd/hash and owned prepare files.
+            host._stable()
+            self._host_binding = (host, self._sdk, self._binding, self._root,
+                                  self._owner, self._source, self._environment)
+            self._host_stamp = (tuple(self._fds), tuple(self._created))
+            host._platform_tools_binding = self._host_binding
+        except BaseException:
+            self._state = 'HOST_UNKNOWN'
+            raise RuntimeError(ERROR) from None
+        # SDK._handle_owner is the single authority point for both owners.
+
+    def _host_origin(self, host):
+        from android_release_preconfig_host_resources import OriginalPreconfigHostResources, _OWNERS as owners
+        from android_release_preconfig_sdk import OriginalPreconfigSdk
+        self._original()
+        require(type(host) is OriginalPreconfigHostResources and host._original(host)
+                and owners.get(id(host)) is host and host._registered is True
+                and host._handle_owner is host and self._host is host
+                and host._sdk is self._sdk and type(self._sdk) is OriginalPreconfigSdk
+                and self._sdk._handle_owner is host
+                and type(self._sdk._state) is str and self._sdk._state == 'TRANSFERRED'
+                and host._platform_tools_source is self
+                and host._platform_tools_binding is self._host_binding
+                and type(self._host_binding) is tuple and len(self._host_binding) == 7)
+        require(all(a is b for a, b in zip(self._host_binding,
+            (host, self._sdk, self._binding, self._root, self._owner, self._source, self._environment))))
+
+    def _verify_host(self, host):
+        """RAM ownership only; no extra file reads, hashes or clock samples."""
+        import android_release_preconfig_sdk as source
+        self._host_origin(host)
+        require(type(self._state) is str and self._state == 'BOUND' and self._child_unknown is False
+                and type(self._close_uncertain) is list and not self._close_uncertain
+                and self._sdk._registered is True and source._OWNERS.get(id(self._sdk)) is self._sdk
+                and type(self._fds) is list and all(type(fd) is int and fd >= 3 for fd in self._fds)
+                and type(self._created) is list and all(type(e) is tuple and len(e) == 2
+                    and type(e[0]) is type(self._root) and type(e[1]) is tuple and len(e[1]) == 8
+                    and all(type(n) is int for n in e[1]) for e in self._created)
+                and type(self._host_stamp) is tuple and len(self._host_stamp) == 2
+                and type(self._host_stamp[0]) is tuple
+                and all(type(fd) is int for fd in self._host_stamp[0])
+                and tuple(self._fds) == self._host_stamp[0]
+                and type(self._host_stamp[1]) is tuple and len(self._created) == len(self._host_stamp[1])
+                and all(a is b for a, b in zip(self._created, self._host_stamp[1])))
+
+    def _close_from_host(self, host):
+        self._verify_host(host)
+        require(host._state == 'CLOSING' and not host._fds and not host._uncertain
+                and not host._auth_fds and not host._listener_fds
+                and not host._auth_open_unknown and not host._listener_open_unknown)
+        self._state = 'CLOSING'
+        self._close_owned_files()
+        self._host_origin(host)
+        require(host._state == 'CLOSING')
+        self._state = 'HOST_CLOSED'  # Keep this source slot until SDK retirement succeeds.
+
+    def _retire_from_host(self, host):
+        import android_release_preconfig_sdk as source
+        self._host_origin(host)
+        require(self._state == 'HOST_CLOSED' and host._state == 'CLOSING'
+                and self._sdk._registered is False and source._OWNERS.get(id(self._sdk)) is None
+                and not self._fds and not self._created and not self._close_uncertain)
+        require(_LOCK.acquire(False))
+        try:
+            self._host_origin(host)
+            require(host._state == 'CLOSING' and self._state == 'HOST_CLOSED')
+            del _OWNERS[id(self)]
+            self._state = 'CLOSED'
+        finally:
+            _LOCK.release()
+
     def close(self):
         self._original()
-        require(not self._child_unknown and not self._close_uncertain
+        require((self._sdk is None or self._sdk._handle_owner is self._sdk)
+                and self._state not in ('HOST_UNKNOWN', 'HOST_CLOSED')
+                and not self._child_unknown and not self._close_uncertain
                 and (self._sdk is None or self._sdk._state == 'CLOSED'
                 or self._sdk._state == 'FAILED' and not self._sdk._fds
                 and not self._sdk._registered and not self._sdk._uncertain and not self._sdk._open_unknown))
         self._state = 'CLOSING'
-        self._refresh_directories()
-        self._guard()
-        while self._fds:
-            self._close_fd(self._fds[-1])
-        for path, before in reversed(self._created):
-            require(identity(path.lstat()) == before and not path.is_symlink())
-            if stat.S_ISDIR(before[2]):
-                path.rmdir()
-            else:
-                path.unlink()
-            for i, (parent, value) in enumerate(self._created):
-                if parent == path.parent and stat.S_ISDIR(value[2]):
-                    self._created[i] = (parent, identity(parent.lstat()))
-        self._created.clear()
-        require(self._root is None or not self._root.exists())
+        self._close_owned_files()
         self._state = 'CLOSED'
         require(_LOCK.acquire(False))
         try:
@@ -412,11 +501,29 @@ class PreparedPlatformTools:
         finally:
             _LOCK.release()
 
+    def _close_owned_files(self):
+        self._refresh_directories()
+        self._guard()
+        while self._fds:
+            self._close_fd(self._fds[-1])
+        for path, before in reversed(self._created):
+            require(identity(self._cleanup_call(path.lstat)) == before
+                    and not self._cleanup_call(path.is_symlink))
+            if stat.S_ISDIR(before[2]):
+                self._cleanup_call(path.rmdir)
+            else:
+                self._cleanup_call(path.unlink)
+            for i, (parent, value) in enumerate(self._created):
+                if parent == path.parent and stat.S_ISDIR(value[2]):
+                    self._created[i] = (parent, identity(self._cleanup_call(parent.lstat)))
+        self._created.clear()
+        require(self._root is None or not self._cleanup_call(self._root.exists))
+
 
 def controlled_verify():
     """One hosted Linux prepare; no AVD, server, key, device or product commands."""
     import android_release_preconfig_sdk as source
-    task, sdk = PreparedPlatformTools(), None
+    task, sdk, resource = PreparedPlatformTools(), None, None
     original = {k: os.environ.get(k) for k in ('ANDROID_HOME', 'ANDROID_SDK_ROOT')}
     proof = dict(passed=False, actual_linux_prepare=False, source_provenance=None,
                  factory_Native_ACK_A0_A6=False, server_device_key_commands_requested=False,
@@ -430,11 +537,16 @@ def controlled_verify():
         task.bind_sdk(sdk)
         sdk.verify()
         task.probe_version_once()
+        from android_release_preconfig_host_resources import OriginalPreconfigHostResources
+        task._phase = 'HOST_RESOURCE_BINDING'
+        resource = OriginalPreconfigHostResources(sdk)
+        resource.claim()
         proof.update(passed=True, actual_linux_prepare=True, owner=task._owner,
             artifact=dict(url=ARCHIVE, bytes=ARCHIVE_BYTES, sha256=ARCHIVE_SHA256,
                           version=VERSION, publisher_build_id=BUILD, adb_sha256=ADB_SHA256),
             source_provenance=task._source, api36=task._api36, probe=task._probe,
-            same_sdk_descriptor_binding=True, adb_fd_identity=list(task._binding[2]))
+            same_sdk_descriptor_binding=True, adb_fd_identity=list(task._binding[2]),
+            actual_prechild_host_resource_binding=True)
     except BaseException:
         proof['failure'] = ERROR  # No private exception text or arbitrary SDK streams.
         proof['failure_stage'] = task._phase
@@ -444,12 +556,17 @@ def controlled_verify():
     finally:
         try:
             if not task._child_unknown:
-                if sdk is not None:
+                if resource is not None:
+                    if resource._state == 'READY':
+                        resource.close()
+                    require(resource._state == 'CLOSED' and task._state == 'CLOSED'
+                            and sdk._registered is False and not sdk._fds)
+                elif sdk is not None:
                     if sdk._state in ('NEW', 'READY', 'CLOSED'):
                         sdk.close()
                     require(not sdk._fds and not sdk._registered and not sdk._uncertain
                             and not sdk._open_unknown)
-                if task._owner is not None:
+                if task._owner is not None and task._state != 'CLOSED':
                     task.close()
                 proof['cleanup_complete'] = True
         except BaseException:
