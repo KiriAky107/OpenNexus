@@ -2,7 +2,9 @@
 
 This pre-child owner derives its location from the running hosted environment,
 not caller metadata. It does not construct commands, own an ADB server, attest
-SDK artifact bytes, admit a device or transfer handles to a child. An original
+SDK artifact bytes by default, admit a device or transfer handles to a child.
+An actual fixed platform-tools prepare can bind and recheck these same fds.
+That optional binding is not managed-server or device admission. An original
 host resource owner can consume its pre-child close authority. Unknown opens
 and uncertain closes retain their strong owner without automatic cleanup.
 """
@@ -29,6 +31,7 @@ class OriginalPreconfigSdk:
         self._registered = self._releasing = self._open_unknown = False
         self._inflight = 0
         self._context = self._sdk = self._parent_pid = self._uid = None
+        self._platform_tools_source = None
 
     def _issued(self):
         reference = getattr(self, '_origin', None)
@@ -186,6 +189,10 @@ class OriginalPreconfigSdk:
             self._need(type(target) is str and target == path
                 and self._identity(self._step(os.stat, alias),
                     'adb' if path.endswith('/adb') else 'api36') == identity)
+        if self._platform_tools_source is not None:
+            from android_release_platform_tools import PreparedPlatformTools
+            self._need(type(self._platform_tools_source) is PreparedPlatformTools)
+            self._platform_tools_source.verify_sdk(self)
 
     def pin(self):
         self._issued()
