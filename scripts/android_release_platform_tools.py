@@ -46,6 +46,98 @@ ERROR = 'SIGNED_PLATFORM_TOOLS_PREPARE_UNAVAILABLE'
 # Reads/reopens, chmod/chown/xattrs and general command behavior are NOT covered.
 # https://docs.kernel.org/userspace-api/landlock.html
 _LANDLOCK_WRITES = (1 << 16) - 1 - (1 << 0) - (1 << 2) - (1 << 3)
+# Fixed Linux v6.10 seccomp/filter/audit UAPI and x86_64 syscall table.
+# This version-only policy does not restrict read paths or memory key generation.
+_SECCOMP_ALLOW = 0x7fff0000
+_SECCOMP_DENY = 0x00050000 | errno.EPERM
+_SECCOMP_KILL = 0x80000000
+
+
+class _SockFilter(ctypes.Structure):
+    _fields_ = [('code', ctypes.c_uint16), ('jt', ctypes.c_uint8),
+                ('jf', ctypes.c_uint8), ('k', ctypes.c_uint32)]
+
+
+class _SockFprog(ctypes.Structure):
+    _fields_ = [('len', ctypes.c_ushort), ('filter', ctypes.POINTER(_SockFilter))]
+
+
+def _version_seccomp_filter():
+    """A closed default-deny program, not a caller-supplied policy or port."""
+    load, equal, bits, ret = 0x20, 0x15, 0x45, 0x06
+    allow, deny = (ret, 0, 0, _SECCOMP_ALLOW), (ret, 0, 0, _SECCOMP_DENY)
+    program = [(load, 0, 0, 4), (equal, 1, 0, 0xc000003e),
+               (ret, 0, 0, _SECCOMP_KILL), (load, 0, 0, 0),
+               (bits, 0, 1, 0x40000000), (ret, 0, 0, _SECCOMP_KILL)]
+    # Read/memory/loader/exit operations only. No metadata mutations, sockets,
+    # process creation, ioctl, ptrace, namespace or policy-changing syscalls.
+    for number in (0, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 17, 21,
+                   24, 25, 28, 35, 39, 60, 63, 79, 89, 97, 99, 102, 104,
+                   107, 108, 131, 186, 202, 204, 217, 218, 228, 230, 231,
+                   262, 267, 273, 318, 332, 334):
+        program.extend(((equal, 0, 1, number), allow))
+
+    def exact(argument, value):
+        offset = 16 + argument * 8
+        return [(load, 0, 0, offset + 4), (equal, 1, 0, 0), deny,
+                (load, 0, 0, offset), (equal, 1, 0, value), deny]
+
+    def branch(number, body):
+        require(len(body) <= 255)
+        program.extend([(equal, 0, len(body), number), *body])
+
+    # Writes are limited to the two original output pipes. fd3 cannot be closed
+    # or replaced before the descriptor-bound exec; duplication is not allowed.
+    for number in (1, 20):
+        branch(number, [(load, 0, 0, 16), (equal, 2, 0, 1),
+                        (equal, 1, 0, 2), deny, allow])
+    branch(3, [(load, 0, 0, 16), (equal, 0, 1, 3), deny, allow])
+    for number, argument in ((2, 1), (257, 2)):
+        # Only O_RDONLY with optional O_CLOEXEC. openat2's pointed-to flags and
+        # all other flags are rejected, without interpreting path pointers.
+        offset = 16 + argument * 8
+        branch(number, [(load, 0, 0, offset + 4), (equal, 1, 0, 0), deny,
+                        (load, 0, 0, offset), (bits, 0, 1, 0xfff7ffff), deny, allow])
+    branch(72, [(load, 0, 0, 28), (equal, 1, 0, 0), deny,
+                (load, 0, 0, 24), (equal, 2, 0, 1), (equal, 1, 0, 3), deny, allow])
+    branch(158, [*exact(0, 0x1002), allow])  # ARCH_SET_FS for the dynamic loader.
+    branch(302, [*exact(0, 0), *exact(2, 0), allow])  # Read own rlimit only.
+    branch(322, [*exact(0, 3), *exact(4, 0x1000), allow])  # AT_EMPTY_PATH, held adb.
+    program.append(deny)
+    require(len(program) <= 4096)
+    return tuple(program)
+
+
+def _seccomp_api(library):
+    """Read-only capability/layout gate before prepare IO; never filter the parent."""
+    require(sys.byteorder == 'little' and ctypes.sizeof(ctypes.c_void_p) == 8
+            and ctypes.sizeof(_SockFilter) == 8 and ctypes.sizeof(_SockFprog) == 16
+            and _SockFprog.filter.offset == 8)
+    action = ctypes.c_uint32(0x00050000)  # SECCOMP_RET_ERRNO, no errno data.
+    result = library.syscall(317, ctypes.c_uint(2), ctypes.c_uint(0), ctypes.byref(action))
+    require(type(result) is int and result == 0 and action.value == 0x00050000)
+
+
+def _restrict_version_metadata(library):
+    """Install on this child, then require denied, non-mutating invalid-fd probes."""
+    _seccomp_api(library)
+    instructions = _version_seccomp_filter()
+    blocks = (_SockFilter * len(instructions))(*(_SockFilter(*v) for v in instructions))
+    program = _SockFprog(len(blocks), blocks)
+    result = library.syscall(317, ctypes.c_uint(1), ctypes.c_uint(0), ctypes.byref(program))
+    require(type(result) is int and result == 0)
+    # Invalid fd/null paths cannot change metadata even if installation failed.
+    # EPERM (rather than EBADF/EFAULT) is required from the installed filter.
+    probes = ((91, (-1, 0)), (93, (-1, -1, -1)),
+              (190, (-1, ctypes.c_void_p(), ctypes.c_void_p(), 0, 0)),
+              (280, (-1, ctypes.c_void_p(), ctypes.c_void_p(), 0)),
+              (2, (ctypes.c_void_p(), 1, 0)),
+              (257, (-100, ctypes.c_void_p(), 0x40, 0)),
+              (257, (-100, ctypes.c_void_p(), 0x200, 0)))
+    for number, arguments in probes:
+        ctypes.set_errno(0)
+        result = library.syscall(number, *arguments)
+        require(type(result) is int and result == -1 and ctypes.get_errno() == errno.EPERM)
 
 
 def require(value):
@@ -106,6 +198,7 @@ def _confined_version_child():
     else:
         raise RuntimeError(ERROR)
     os.set_inheritable(3, False)
+    _restrict_version_metadata(library)
     os.execve(3, ('/proc/self/fd/3', 'version'), os.environ.copy())
     raise RuntimeError(ERROR)  # An exec that returned is not SDK completion.
 
@@ -301,7 +394,9 @@ class PreparedPlatformTools:
             pidfd=callable(getattr(os, 'pidfd_open', None)))
         require(self._state == 'NEW' and all(self._capabilities.values()))
         self._phase = 'LANDLOCK_ABI_GATE'
-        _, self._landlock_abi = _landlock_api()  # Unsupported before prepare IO.
+        native, self._landlock_abi = _landlock_api()  # Unsupported before prepare IO.
+        self._phase = 'SECCOMP_CAPABILITY_GATE'
+        _seccomp_api(native)
         require(_LOCK.acquire(False))
         try:
             require(not _OWNERS)
@@ -512,6 +607,9 @@ class PreparedPlatformTools:
             stdout_bytes=len(out), stderr_bytes=0, actual_linux_version_probe=True,
             actual_version_landlock_write_actions_enforced=True, landlock_abi=abi,
             handled_access_fs=_LANDLOCK_WRITES, inherited_writable_regular_files=False,
+            actual_version_metadata_syscalls_and_open_flags_enforced=True,
+            seccomp_arch='x86_64', seccomp_default='EPERM',
+            seccomp_x32_or_other_arch='KILL_PROCESS', seccomp_denial_probes=7,
             isolated_version_environment=True,
             source_script_sha256=programs[1][3], interpreter_sha256=programs[0][3],
             general_no_generation_reopen_endpoint_or_factory_admission=False)

@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path, PurePosixPath
 import stat
+import struct
 import sys
 from types import SimpleNamespace
 import unittest
@@ -24,7 +25,7 @@ class Function:
 
     def __call__(self, *args):
         values = [a.value if hasattr(a, 'value') else
-                  a._obj.value if hasattr(a, '_obj') else a for a in args]
+                  getattr(a._obj, 'value', a._obj) if hasattr(a, '_obj') else a for a in args]
         return self.function(*values)
 
 
@@ -48,6 +49,9 @@ class Model:
             return -1
         if number == 444:
             return self.abi if args[-1] == 1 else 9
+        if number in (91, 93, 190, 280, 2, 257):
+            subject.ctypes.set_errno(errno.EPERM)
+            return -1
         return 0
 
     def prctl(self, number, *args):
@@ -91,7 +95,7 @@ class VersionLandlock(unittest.TestCase):
     def setUp(self):
         self.model = Model()
         self.patches = [patch.object(subject, 'os', self.model.os),
-            patch.object(subject, 'sys', SimpleNamespace(platform='linux', version_info=(3, 13))),
+            patch.object(subject, 'sys', SimpleNamespace(platform='linux', version_info=(3, 13), byteorder='little')),
             patch.object(subject, 'Path', PurePosixPath),
             patch.object(subject.ctypes, 'CDLL', return_value=self.model.library)]
         for p in self.patches:
@@ -136,7 +140,9 @@ class VersionLandlock(unittest.TestCase):
         self.assertIn(('prctl', 38, 1, 0, 0, 0), e)
         self.assertLess(e.index(('prctl', 39, 0, 0, 0, 0)), e.index(('syscall', 446, 9, 0)))
         self.assertFalse(any(x[0] == 'syscall' and x[1] == 445 for x in e))
-        self.assertEqual(e[-2:], [('inherit', 3, False), ('execve', 3, ('/proc/self/fd/3', 'version'), {})])
+        self.assertEqual(e[-1], ('execve', 3, ('/proc/self/fd/3', 'version'), {}))
+        self.assertLess(e.index(('inherit', 3, False)), next(i for i, v in enumerate(e)
+            if v[0:3] == ('syscall', 317, 1)))
         attempt = next(x for x in e if x[0] == 'open')
         self.assertEqual(attempt[1], PurePosixPath('/owned/sdk/platform-tools/.landlock-write-denial-probe'))
         self.assertLess(e.index(('close', 9)), e.index(attempt))
@@ -197,6 +203,140 @@ class ChildEntryPrivacy(unittest.TestCase):
                 exec(code, {'__name__': '__main__'})
         stop.assert_called_once_with(91)
         self.assertEqual((out.getvalue(), err.getvalue()), ('', ''))
+
+
+class VersionMetadata(unittest.TestCase):
+    """Evaluate the actual generated cBPF in RAM; no native sandbox or SDK child."""
+    def decide(self, number, arguments=(), arch=0xc000003e):
+        data = struct.pack('<iIQ6Q', number, arch, 0,
+            *(tuple(v & ((1 << 64) - 1) for v in arguments) + (0,) * (6 - len(arguments))))
+        program = subject._version_seccomp_filter()
+        index, accumulator = 0, 0
+        for _ in range(4096):
+            code, yes, no, value = program[index]
+            index += 1
+            if code == 0x20:
+                accumulator = struct.unpack_from('<I', data, value)[0]
+            elif code == 0x15:
+                index += yes if accumulator == value else no
+            elif code == 0x45:
+                index += yes if accumulator & value else no
+            elif code == 0x06:
+                return value
+            else:
+                self.fail('unhandled actual filter instruction')
+        self.fail('actual filter did not terminate')
+
+    def test_other_arch_and_x32_are_killed_before_allowlist(self):
+        for arch in (0x40000003, 0, 0xc00000b7):
+            self.assertEqual(self.decide(0, arch=arch), subject._SECCOMP_KILL)
+        for number in (0x40000000, 0x40000142, -1):
+            self.assertEqual(self.decide(number), subject._SECCOMP_KILL)
+
+    def test_metadata_families_and_unknown_numbers_are_denied(self):
+        for number in (90, 91, 92, 93, 94, 132, 188, 189, 190, 197, 198,
+                       199, 235, 261, 268, 280, 452, 999):
+            self.assertEqual(self.decide(number, (3,)), subject._SECCOMP_DENY)
+
+    def test_process_network_policy_ioctl_and_async_io_are_denied(self):
+        for number in (16, 41, 42, 56, 57, 58, 59, 101, 157, 165, 206,
+                       272, 298, 304, 308, 317, 321, 425, 426, 427, 435, 437):
+            self.assertEqual(self.decide(number), subject._SECCOMP_DENY)
+
+    def test_open_flags_allow_readonly_cloexec_and_reject_each_other_bit(self):
+        for number, slot in ((2, 1), (257, 2)):
+            for flags in (0, 0x80000):
+                args = [0] * 6; args[slot] = flags
+                self.assertEqual(self.decide(number, args), subject._SECCOMP_ALLOW)
+            for flags in [1 << i for i in range(64) if i != 19] + [-1]:
+                args = [0] * 6; args[slot] = flags
+                self.assertEqual(self.decide(number, args), subject._SECCOMP_DENY)
+
+    def test_only_output_pipe_writes_and_original_sdk_close_is_blocked(self):
+        for number in (1, 20):
+            for fd in (0, 1, 2, 3, 4, -1):
+                expected = subject._SECCOMP_ALLOW if fd in (1, 2) else subject._SECCOMP_DENY
+                self.assertEqual(self.decide(number, (fd,)), expected)
+        for fd in (0, 1, 2, 3, 4, 50):
+            expected = subject._SECCOMP_DENY if fd == 3 else subject._SECCOMP_ALLOW
+            self.assertEqual(self.decide(3, (fd,)), expected)
+
+    def test_exec_requires_held_fd_and_exact_empty_path_flag(self):
+        self.assertEqual(self.decide(322, (3, 0, 0, 0, 0x1000)), subject._SECCOMP_ALLOW)
+        for fd, flags in ((4, 0x1000), (3 + (1 << 32), 0x1000), (3, 0),
+                          (3, 0x1100), (3, 0x1000 + (1 << 32))):
+            self.assertEqual(self.decide(322, (fd, 0, 0, 0, flags)), subject._SECCOMP_DENY)
+
+    def test_fcntl_and_rlimit_are_readonly(self):
+        for command in (0, 1, 2, 3, 4, 1030, (1 << 32) + 1):
+            expected = subject._SECCOMP_ALLOW if command in (1, 3) else subject._SECCOMP_DENY
+            self.assertEqual(self.decide(72, (3, command)), expected)
+        self.assertEqual(self.decide(302), subject._SECCOMP_ALLOW)
+        for args in ((1, 0, 0), (0, 0, 1), (0, 0, 1 << 32)):
+            self.assertEqual(self.decide(302, args), subject._SECCOMP_DENY)
+
+    def test_loader_read_memory_tls_and_exit_remain_available(self):
+        for number in (0, 5, 9, 10, 11, 12, 13, 14, 17, 63, 89, 202, 218,
+                       228, 231, 262, 273, 318, 332, 334):
+            self.assertEqual(self.decide(number), subject._SECCOMP_ALLOW)
+        self.assertEqual(self.decide(158, (0x1002,)), subject._SECCOMP_ALLOW)
+        self.assertEqual(self.decide(158, (0x1003,)), subject._SECCOMP_DENY)
+
+    def test_capability_query_is_readonly_and_rejects_unknown_or_private(self):
+        for result in (0, 1, True, PrivateValue()):
+            model = Model()
+            model.library.syscall = Function(lambda *args: result)
+            if type(result) is int and result == 0:
+                subject._seccomp_api(model.library)
+            else:
+                with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
+                    subject._seccomp_api(model.library)
+
+    def test_child_installs_actual_generated_program_before_seven_denials(self):
+        model = Model()
+        captured = []
+        def syscall(number, operation, flags, program):
+            if operation == 1:
+                captured.extend((v.code, v.jt, v.jf, v.k)
+                    for v in program.filter[:program.len])
+            return 0
+        original = model.syscall
+        model.library.syscall = Function(lambda number, *args:
+            syscall(number, *args) if number == 317 else original(number, *args))
+        subject._restrict_version_metadata(model.library)
+        self.assertEqual(tuple(captured), subject._version_seccomp_filter())
+        self.assertEqual([e[1] for e in model.events], [91, 93, 190, 280, 2, 257, 257])
+        self.assertFalse(any(e[0] in ('open', 'execve') for e in model.events))
+
+    def test_install_failure_does_not_attempt_denial_probes_or_exec(self):
+        model = Model()
+        def syscall(number, operation, *args):
+            model.events.append((number, operation))
+            return -1 if operation == 1 else 0
+        model.library.syscall = Function(syscall)
+        with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
+            subject._restrict_version_metadata(model.library)
+        self.assertEqual(model.events, [(317, 2), (317, 1)])
+
+    def test_wrong_errno_or_unexpected_success_stops_after_first_probe(self):
+        for result, error in ((0, 0), (-1, errno.EBADF), (True, errno.EPERM),
+                              (PrivateValue(), errno.EPERM)):
+            model = Model()
+            def syscall(number, *args):
+                model.events.append(number)
+                subject.ctypes.set_errno(error)
+                return 0 if number == 317 else result
+            model.library.syscall = Function(syscall)
+            with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
+                subject._restrict_version_metadata(model.library)
+            self.assertEqual(model.events, [317, 317, 91])
+
+    def test_actual_windows_rejects_before_loading_native_capabilities(self):
+        with patch.object(subject.sys, 'platform', 'win32'), \
+                patch.object(subject.ctypes, 'CDLL') as load:
+            with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
+                subject.PreparedPlatformTools().prepare()
+            load.assert_not_called()
 
 
 if __name__ == '__main__':
