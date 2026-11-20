@@ -604,20 +604,63 @@ class VersionDynamicImage(unittest.TestCase):
                 subject._require_fixed_version_runtime(bytes(raw))
 
     def test_hash_bound_dynamic_image_binds_before_program_or_pipe_setup(self):
-        with patch.object(subject.PreparedPlatformTools, '_pin_version_interpreter',
+        with patch.object(subject.PreparedPlatformTools, '_pin_version_runtime',
                           autospec=True) as pin:
             self.assertEqual(self.owner_gate(bytes(self.fixed_runtime_image()),
-                phase='VERSION_INTERPRETER_BOUND_RUNTIME_CLOSURE_REQUIRED'), 1)
+                phase='VERSION_RUNTIME_BOUND_LOADER_FD_LAYOUT_REQUIRED'), 1)
             pin.assert_called_once()
             self.assertEqual(pin.call_args.args[1:], (100, 100))
 
-    def test_interpreter_binding_pins_canonical_file_and_rejects_unknown_open(self):
-        image = VersionStaticImage.image()
+    @classmethod
+    def shared_object(cls, name, dependencies=(), *, extra_tag=None, entry=0):
+        table = bytearray(b'\0')
+        entries = []
+        for tag, item in [(14, name), *((1, item) for item in dependencies)]:
+            entries.append((tag, len(table)))
+            table.extend(item + b'\0')
+        if extra_tag is not None:
+            entries.append((extra_tag, 1))
+        entries.extend(((5, 0x400380), (10, len(table)), (0, 0)))
+        image = bytearray(cls.image(entries))
+        struct.pack_into('<Q', image, 24, entry)
+        image[896:896 + len(table)] = table
+        return bytes(image)
+
+    def test_shared_library_accepts_zero_entry_and_checks_exact_soname(self):
+        raw = self.shared_object(b'libm.so.6', (b'libc.so.6', b'ld-linux-x86-64.so.2'))
+        self.assertEqual(subject._version_library_dependencies(raw, b'libm.so.6'),
+                         (b'libc.so.6', b'ld-linux-x86-64.so.2'))
+        with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
+            subject._version_library_dependencies(raw, b'librt.so.1')
+
+    def test_shared_library_rejects_unbound_transitive_names_and_search_tags(self):
+        rejected = [
+            self.shared_object(b'libm.so.6', dependencies)
+            for dependencies in ((b'libx.so.1',), (b'../libc.so.6',), (b'libm.so.6',),
+                                 (b'libc.so.6', b'libc.so.6'))
+        ]
+        rejected.extend(self.shared_object(b'libm.so.6', extra_tag=tag)
+                        for tag in (15, 29, 0x6ffffefb, 0x7fffffff))
+        for raw in rejected:
+            with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
+                subject._version_library_dependencies(raw, b'libm.so.6')
+
+    def test_runtime_binding_pins_each_file_and_retains_handles_after_unknown_open(self):
+        loader = b'ld-linux-x86-64.so.2'
+        names = [loader, *(n for n in subject._VERSION_DIRECT_LIBRARIES if n != loader)]
+        images = [self.shared_object(name, () if name == loader else (loader,),
+                                     entry=0x400100 if name == loader else 0)
+                  for name in names]
         directory = os.stat_result((stat.S_IFDIR | 0o755, 1, 2, 1, 0, 0, 0, 0, 0, 0))
-        binary = os.stat_result((stat.S_IFREG | 0o755, 3, 2, 1, 0, 0, len(image), 0, 0, 0))
+        file_stats = [os.stat_result((stat.S_IFREG | 0o755, 3 + i, 2, 1,
+                                      0, 0, len(raw), 0, 0, 0))
+                      for i, raw in enumerate(images)]
         canonical_path = PurePosixPath(subject._VERSION_INTERPRETER_FILE)
-        canonical = SimpleNamespace(parts=canonical_path.parts, name=canonical_path.name,
-                                    lstat=lambda: binary)
+        paths = [SimpleNamespace(name=name.decode('ascii'), lstat=lambda info=info: info)
+                 for name, info in zip(names, file_stats)]
+        canonical = paths[0]
+        canonical.parts = canonical_path.parts
+        canonical.with_name = dict(zip((n.decode('ascii') for n in names), paths)).__getitem__
         logical = SimpleNamespace(resolve=Mock(return_value=canonical))
         for uncertain in (False, True):
             task = subject.PreparedPlatformTools()
@@ -625,27 +668,32 @@ class VersionDynamicImage(unittest.TestCase):
             task._sdk = SimpleNamespace(_fds=[55])
             native = SimpleNamespace(O_RDONLY=0, O_NOFOLLOW=1, O_CLOEXEC=2,
                 O_DIRECTORY=4, O_NONBLOCK=8, get_inheritable=Mock(return_value=False),
-                fstat=Mock(side_effect=lambda fd: binary if fd == 14 else directory),
-                pread=Mock(return_value=image),
-                open=Mock(side_effect=[10, 11, 12, 13, KeyboardInterrupt() if uncertain else 14]))
+                fstat=Mock(side_effect=lambda fd: file_stats[fd - 14] if fd >= 14 else directory),
+                pread=Mock(side_effect=lambda fd, size, offset: images[fd - 14]),
+                open=Mock(side_effect=[10, 11, 12, 13, 14, KeyboardInterrupt()]
+                          if uncertain else range(10, 14 + len(names))))
             with patch.object(task, '_original'), patch.object(subject, 'os', native), \
                     patch.object(subject, 'Path', side_effect=[logical, canonical]), \
                     patch.object(subject.time, 'monotonic_ns', return_value=1):
                 if uncertain:
                     with self.assertRaises(KeyboardInterrupt):
-                        task._pin_version_interpreter(0, 0)
+                        task._pin_version_runtime(0, 0)
                     self.assertTrue(task._runtime_open_unknown)
-                    self.assertIsNone(task._version_interpreter)
-                    native.pread.assert_not_called()
-                    self.assertEqual(task._fds, [10, 11, 12, 13])
+                    self.assertEqual(task._version_interpreter[0], 14)
+                    self.assertIsNone(task._version_runtime_libraries)
+                    native.pread.assert_called_once_with(14, len(images[0]) + 1, 0)
+                    self.assertEqual(task._fds, [10, 11, 12, 13, 14])
                 else:
-                    task._pin_version_interpreter(0, 0)
+                    task._pin_version_runtime(0, 0)
                     self.assertFalse(task._runtime_open_unknown)
                     self.assertEqual(task._version_interpreter[0], 14)
-                    self.assertEqual(task._fds, [10, 11, 12, 13, 14])
-                    native.pread.assert_called_once_with(14, len(image) + 1, 0)
+                    self.assertEqual(task._fds, list(range(10, 14 + len(names))))
+                    self.assertEqual([binding[0] for binding in task._version_runtime_libraries],
+                                     list(range(15, 14 + len(names))))
+                    self.assertEqual([c.args for c in native.pread.call_args_list],
+                                     [(14 + i, len(raw) + 1, 0) for i, raw in enumerate(images)])
                 self.assertEqual([c.kwargs['dir_fd'] for c in native.open.call_args_list],
-                                 [None, 10, 11, 12, 13])
+                                 [None, 10, 11, 12] + [13] * (2 if uncertain else len(names)))
 
 
 if __name__ == '__main__':
