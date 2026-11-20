@@ -55,6 +55,10 @@ _LANDLOCK_VERSION_ACCESS = _LANDLOCK_WRITES | (1 << 0) | (1 << 2) | (1 << 3)
 _SECCOMP_ALLOW = 0x7fff0000
 _SECCOMP_DENY = 0x00050000 | errno.EPERM
 _SECCOMP_KILL = 0x80000000
+# A bounded self-relocation table may exist in a static image. No interpreter,
+# DT_NEEDED, search-path, audit/filter or unrecognized dynamic tag is supported.
+_STATIC_DYNAMIC_TAGS = frozenset(range(2, 15)) | frozenset(range(16, 24)) | frozenset(
+    (0x6ffffff0, 0x6ffffff9, 0x6ffffffa, 0x6ffffffb, 0x6ffffffc))
 
 
 class _SockFilter(ctypes.Structure):
@@ -71,6 +75,12 @@ class _LandlockPath(ctypes.Structure):
     _fields_ = [('allowed_access', ctypes.c_uint64), ('parent_fd', ctypes.c_int32)]
 
 
+class _VersionRuntimeUnsupported(RuntimeError):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(ERROR)
+
+
 def _require_static_version_image(raw):
     """Used on the actual hash-bound SDK fd before any version child setup."""
     require(type(raw) is bytes and 64 <= len(raw) <= 64 * 1024 * 1024)
@@ -80,18 +90,42 @@ def _require_static_version_image(raw):
             and machine == 62 and version == 1 and header[8] == 64
             and header[9] == 56 and 1 <= header[10] <= 128
             and 64 <= offset <= len(raw) - header[10] * 56)
-    executable_entry = False
+    executable_entry, interpreter, loads, dynamics = False, False, [], []
     for index in range(header[10]):
         segment, flags, start, address, _, size, memory, _ = struct.unpack_from(
             '<IIQQQQQQ', raw, offset + index * 56)
-        # This deliberately supports no interpreter or dynamic segment. A file
-        # needing native runtime discovery is unsupported before child creation;
-        # no broad filesystem read permission is added as a fallback.
-        require(segment not in (2, 3) and start <= len(raw) and size <= len(raw) - start)
+        require(start <= len(raw) and size <= len(raw) - start)
         if segment == 1:
             require(size <= memory)
+            loads.append((start, address, size))
             executable_entry |= bool(flags & 1 and address <= entry < address + size)
+        elif segment == 2:
+            dynamics.append((start, address, size))
+        elif segment == 3:
+            interpreter = True
     require(executable_entry)
+    if interpreter:
+        # Kernel open_exec of PT_INTERP needs a separately owned execute/read
+        # source. Never silently extend the held-SDK-only execute rule.
+        raise _VersionRuntimeUnsupported(1)
+    require(len(dynamics) <= 1)
+    for start, address, size in dynamics:
+        require(16 <= size <= 65536 and size % 16 == 0
+                and any(base <= start and start + size <= base + length
+                    and address == virtual + start - base for base, virtual, length in loads))
+        terminated = False
+        for offset in range(start, start + size, 16):
+            tag, value = struct.unpack_from('<qQ', raw, offset)
+            if terminated:
+                require(tag == 0 and value == 0)
+            elif tag == 0:
+                require(value == 0)
+                terminated = True
+            elif tag == 1:
+                raise _VersionRuntimeUnsupported(2)
+            elif tag not in _STATIC_DYNAMIC_TAGS:
+                raise _VersionRuntimeUnsupported(3)
+        require(terminated)
 
 
 def _version_seccomp_filter():
@@ -585,7 +619,15 @@ class PreparedPlatformTools:
         require(type(raw) is bytes and len(raw) == ADB_BYTES
                 and hashlib.sha256(raw).hexdigest() == ADB_SHA256
                 and sdk_identity(os.fstat(sdk_fd)) == before)
-        _require_static_version_image(raw)
+        try:
+            _require_static_version_image(raw)
+        except _VersionRuntimeUnsupported as unsupported:
+            require(type(unsupported) is _VersionRuntimeUnsupported
+                    and type(unsupported.reason) is int and unsupported.reason in (1, 2, 3))
+            self._phase = ('VERSION_IMAGE_PT_INTERP_UNSUPPORTED',
+                           'VERSION_IMAGE_DT_NEEDED_UNSUPPORTED',
+                           'VERSION_IMAGE_DYNAMIC_TAG_UNSUPPORTED')[unsupported.reason - 1]
+            raise RuntimeError(ERROR) from None
         now = time.monotonic_ns()
         require(last <= now <= start + 5_000_000_000)
         last = now
@@ -689,7 +731,8 @@ class PreparedPlatformTools:
             actual_version_path_read_and_reopen_denied=True,
             landlock_execute_allowed_only_held_sdk=True, read_path_denial_probes=3,
             inherited_sdk_read_denial_probes=3,
-            static_ELF_no_interpreter_or_dynamic_segment=True,
+            static_ELF_no_interpreter_or_needed_libraries=True,
+            static_ELF_dynamic_table_closed=True,
             isolated_version_environment=True,
             source_script_sha256=programs[1][3], interpreter_sha256=programs[0][3],
             general_no_generation_reopen_endpoint_or_factory_admission=False)

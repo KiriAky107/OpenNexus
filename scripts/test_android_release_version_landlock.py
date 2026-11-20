@@ -450,7 +450,7 @@ class VersionStaticImage(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
             subject._require_static_version_image(raw)
 
-    def test_static_image_requires_no_interpreter_or_dynamic_segment(self):
+    def test_plain_static_image_and_invalid_runtime_only_segments(self):
         self.assertIsNone(subject._require_static_version_image(self.image()))
         self.rejects(self.image(2))
         self.rejects(self.image(3))
@@ -475,7 +475,7 @@ class VersionStaticImage(unittest.TestCase):
             self.rejects(bytes(raw))
         self.rejects(self.image(4))
 
-    def owner_gate(self, raw, *, digest=None, clock=(100,)):
+    def owner_gate(self, raw, *, digest=None, clock=(100,), phase='VERSION_STATIC_IMAGE_GATE'):
         task = subject.PreparedPlatformTools()
         task._binding, task._landlock_abi = (None, 55, (1,)), 5
         native = SimpleNamespace(pread=Mock(return_value=raw), fstat=Mock(return_value=object()),
@@ -494,7 +494,7 @@ class VersionStaticImage(unittest.TestCase):
             native.posix_spawn.assert_not_called()
             self.assertFalse(task._child_unknown)
             self.assertIsNone(task._pid)
-            self.assertEqual(task._phase, 'VERSION_STATIC_IMAGE_GATE')
+            self.assertEqual(task._phase, phase)
             native.pread.assert_called_once_with(55, len(raw) + 1, 0)
             return sample.call_count
 
@@ -506,6 +506,74 @@ class VersionStaticImage(unittest.TestCase):
 
     def test_original_budget_includes_static_validation_without_reset_or_late_io(self):
         self.assertEqual(self.owner_gate(self.image(), clock=(100, 5_000_000_101)), 2)
+
+
+class VersionDynamicImage(unittest.TestCase):
+    owner_gate = VersionStaticImage.owner_gate
+    rejects = VersionStaticImage.rejects
+
+    @staticmethod
+    def image(tags=((7, 0x400280), (8, 24), (9, 24), (0, 0)), *, interpreter=False):
+        raw = bytearray(1024)
+        struct.pack_into('<16sHHIQQQIHHHHHH', raw, 0,
+            b'\x7fELF\x02\x01\x01' + b'\0' * 9, 3, 62, 1, 0x400100,
+            64, 0, 0, 64, 56, 3 if interpreter else 2, 0, 0, 0)
+        struct.pack_into('<IIQQQQQQ', raw, 64, 1, 5, 0, 0x400000, 0,
+                         len(raw), len(raw), 4096)
+        struct.pack_into('<IIQQQQQQ', raw, 120, 2, 6, 512, 0x400200, 0,
+                         len(tags) * 16, len(tags) * 16, 8)
+        for index, pair in enumerate(tags):
+            struct.pack_into('<qQ', raw, 512 + index * 16, *pair)
+        if interpreter:
+            name = b'/lib64/ld-linux-x86-64.so.2\0'
+            raw[800:800 + len(name)] = name
+            struct.pack_into('<IIQQQQQQ', raw, 176, 3, 4, 800, 0x400320, 0,
+                             len(name), len(name), 1)
+        return bytes(raw)
+
+    def test_closed_self_relocation_segment_is_not_an_external_runtime_request(self):
+        self.assertIsNone(subject._require_static_version_image(self.image()))
+        self.assertIsNone(subject._require_static_version_image(self.image(((0, 0), (0, 0)))))
+
+    def test_actual_interpreter_or_needed_tags_have_exact_private_reason(self):
+        for raw, reason in ((self.image(interpreter=True), 1),
+                            (self.image(((1, 5), (0, 0))), 2)):
+            with self.assertRaises(subject._VersionRuntimeUnsupported) as caught:
+                subject._require_static_version_image(raw)
+            self.assertEqual(caught.exception.reason, reason)
+            self.assertEqual(caught.exception.args, (subject.ERROR,))
+
+    def test_search_and_unknown_dynamic_tags_remain_unsupported(self):
+        for tag in (15, 29, -1, 1 << 50):
+            with self.assertRaises(subject._VersionRuntimeUnsupported) as caught:
+                subject._require_static_version_image(self.image(((tag, 5), (0, 0))))
+            self.assertEqual(caught.exception.reason, 3)
+
+    def test_dynamic_segment_bounds_and_loaded_address_mapping_are_required(self):
+        for offset, value in ((128, 1024), (136, 0x400201), (152, 0), (152, 17)):
+            raw = bytearray(self.image()); struct.pack_into('<Q', raw, offset, value)
+            self.rejects(bytes(raw))
+        raw = bytearray(self.image()); struct.pack_into('<H', raw, 56, 3)
+        raw[176:232] = raw[120:176]
+        self.rejects(bytes(raw))
+
+    def test_dynamic_null_termination_and_zero_padding_are_required(self):
+        for tags in (((7, 0x400280),), ((0, 1),), ((0, 0), (7, 1)), ((0, 0), (1, 1))):
+            self.rejects(self.image(tags))
+
+    def test_actual_owner_maps_only_precise_unsupported_prechild_phase(self):
+        for raw, phase in ((self.image(interpreter=True), 'VERSION_IMAGE_PT_INTERP_UNSUPPORTED'),
+                (self.image(((1, 5), (0, 0))), 'VERSION_IMAGE_DT_NEEDED_UNSUPPORTED'),
+                (self.image(((15, 5), (0, 0))), 'VERSION_IMAGE_DYNAMIC_TAG_UNSUPPORTED')):
+            self.assertEqual(self.owner_gate(raw, phase=phase), 1)
+
+    def test_private_bool_or_forged_reason_does_not_select_phase_or_continue(self):
+        class ForeignUnsupported(subject._VersionRuntimeUnsupported):
+            pass
+        for error in [subject._VersionRuntimeUnsupported(v)
+                      for v in (True, PrivateValue(), 0, 4, 1.0)] + [ForeignUnsupported(1)]:
+            with patch.object(subject, '_require_static_version_image', side_effect=error):
+                self.assertEqual(self.owner_gate(self.image()), 1)
 
 
 if __name__ == '__main__':
