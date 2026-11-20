@@ -13,6 +13,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import struct
 import sys
 import threading
 import time
@@ -43,11 +44,14 @@ _OWNERS = {}
 _LOCK = threading.Lock()
 ERROR = 'SIGNED_PLATFORM_TOOLS_PREPARE_UNAVAILABLE'
 # Linux v6.10 UAPI: WRITE_FILE, REMOVE/MAKE/REFER/TRUNCATE and IOCTL_DEV.
-# Reads/reopens, chmod/chown/xattrs and general command behavior are NOT covered.
+# The version child additionally handles reads and execution, granting only the
+# original held SDK file execute access. General command behavior is not covered.
 # https://docs.kernel.org/userspace-api/landlock.html
 _LANDLOCK_WRITES = (1 << 16) - 1 - (1 << 0) - (1 << 2) - (1 << 3)
+_LANDLOCK_VERSION_ACCESS = _LANDLOCK_WRITES | (1 << 0) | (1 << 2) | (1 << 3)
 # Fixed Linux v6.10 seccomp/filter/audit UAPI and x86_64 syscall table.
-# This version-only policy does not restrict read paths or memory key generation.
+# Landlock denies new read opens; seccomp also denies reads/maps of inherited fd3.
+# Neither mechanism proves in-memory key generation or general factory behavior.
 _SECCOMP_ALLOW = 0x7fff0000
 _SECCOMP_DENY = 0x00050000 | errno.EPERM
 _SECCOMP_KILL = 0x80000000
@@ -62,6 +66,34 @@ class _SockFprog(ctypes.Structure):
     _fields_ = [('len', ctypes.c_ushort), ('filter', ctypes.POINTER(_SockFilter))]
 
 
+class _LandlockPath(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [('allowed_access', ctypes.c_uint64), ('parent_fd', ctypes.c_int32)]
+
+
+def _require_static_version_image(raw):
+    """Used on the actual hash-bound SDK fd before any version child setup."""
+    require(type(raw) is bytes and 64 <= len(raw) <= 64 * 1024 * 1024)
+    header = struct.unpack_from('<16sHHIQQQIHHHHHH', raw)
+    ident, kind, machine, version, entry, offset = header[:6]
+    require(ident[:7] == b'\x7fELF\x02\x01\x01' and kind in (2, 3)
+            and machine == 62 and version == 1 and header[8] == 64
+            and header[9] == 56 and 1 <= header[10] <= 128
+            and 64 <= offset <= len(raw) - header[10] * 56)
+    executable_entry = False
+    for index in range(header[10]):
+        segment, flags, start, address, _, size, memory, _ = struct.unpack_from(
+            '<IIQQQQQQ', raw, offset + index * 56)
+        # This deliberately supports no interpreter or dynamic segment. A file
+        # needing native runtime discovery is unsupported before child creation;
+        # no broad filesystem read permission is added as a fallback.
+        require(segment not in (2, 3) and start <= len(raw) and size <= len(raw) - start)
+        if segment == 1:
+            require(size <= memory)
+            executable_entry |= bool(flags & 1 and address <= entry < address + size)
+    require(executable_entry)
+
+
 def _version_seccomp_filter():
     """A closed default-deny program, not a caller-supplied policy or port."""
     load, equal, bits, ret = 0x20, 0x15, 0x45, 0x06
@@ -71,7 +103,7 @@ def _version_seccomp_filter():
                (bits, 0, 1, 0x40000000), (ret, 0, 0, _SECCOMP_KILL)]
     # Read/memory/loader/exit operations only. No metadata mutations, sockets,
     # process creation, ioctl, ptrace, namespace or policy-changing syscalls.
-    for number in (0, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 17, 21,
+    for number in (4, 5, 6, 8, 10, 11, 12, 13, 14, 15, 21,
                    24, 25, 28, 35, 39, 60, 63, 79, 89, 97, 99, 102, 104,
                    107, 108, 131, 186, 202, 204, 217, 218, 228, 230, 231,
                    262, 267, 273, 318, 332, 334):
@@ -85,6 +117,12 @@ def _version_seccomp_filter():
     def branch(number, body):
         require(len(body) <= 255)
         program.extend([(equal, 0, len(body), number), *body])
+
+    # Landlock cannot revoke an already-open readable file. Kernel fd arguments
+    # are ints, so also reject fd3 when the unused upper32 bits are nonzero.
+    for number, argument in ((0, 0), (17, 0), (9, 4)):
+        branch(number, [(load, 0, 0, 16 + argument * 8),
+                        (equal, 0, 1, 3), deny, allow])
 
     # Writes are limited to the two original output pipes. fd3 cannot be closed
     # or replaced before the descriptor-bound exec; duplication is not allowed.
@@ -138,6 +176,17 @@ def _restrict_version_metadata(library):
         ctypes.set_errno(0)
         result = library.syscall(number, *arguments)
         require(type(result) is int and result == -1 and ctypes.get_errno() == errno.EPERM)
+    # Zero length/null arguments cannot read SDK bytes or create a mapping even
+    # if enforcement is broken. Each must fail at the filter with EPERM.
+    null = ctypes.c_void_p()
+    for number, arguments in (
+            (0, (ctypes.c_int(3), null, ctypes.c_size_t(0))),
+            (17, (ctypes.c_int(3), null, ctypes.c_size_t(0), ctypes.c_long(0))),
+            (9, (null, ctypes.c_size_t(0), ctypes.c_int(1), ctypes.c_int(2),
+                 ctypes.c_int(3), ctypes.c_long(0)))):
+        ctypes.set_errno(0)
+        result = library.syscall(number, *arguments)
+        require(type(result) is int and result == -1 and ctypes.get_errno() == errno.EPERM)
 
 
 def require(value):
@@ -148,7 +197,9 @@ def require(value):
 def _landlock_api():
     """Read-only ABI query. Never restrict the preparing parent process."""
     require(sys.platform == 'linux' and os.uname().machine == 'x86_64'
-            and sys.version_info >= (3, 13) and os.execve in os.supports_fd)
+            and sys.version_info >= (3, 13) and os.execve in os.supports_fd
+            and sys.byteorder == 'little' and ctypes.sizeof(_LandlockPath) == 12
+            and _LandlockPath.parent_fd.offset == 8)
     library = ctypes.CDLL(None, use_errno=True)
     library.syscall.restype = ctypes.c_long
     library.syscall.argtypes = [ctypes.c_long]
@@ -182,9 +233,13 @@ def _confined_version_child():
     sdk_path = Path(os.readlink('/proc/self/fd/3'))
     require(sdk_path.is_absolute() and sdk_path.name == 'adb'
             and sdk_path.parent.name == 'platform-tools')
-    rules = ctypes.c_uint64(_LANDLOCK_WRITES)
+    rules = ctypes.c_uint64(_LANDLOCK_VERSION_ACCESS)
     rule_fd = library.syscall(444, ctypes.byref(rules), ctypes.c_size_t(8), ctypes.c_uint(0))
     require(type(rule_fd) is int and rule_fd >= 4)
+    executable = _LandlockPath(1, 3)  # EXECUTE only; no read permission or directory rule.
+    result = library.syscall(445, ctypes.c_int(rule_fd), ctypes.c_int(1),
+                             ctypes.byref(executable), ctypes.c_uint(0))
+    require(type(result) is int and result == 0)
     require(library.prctl(38, 1, 0, 0, 0) == 0 and library.prctl(39, 0, 0, 0, 0) == 1)
     require(library.syscall(446, ctypes.c_int(rule_fd), ctypes.c_uint(0)) == 0)
     require(os.close(rule_fd) is None)
@@ -197,6 +252,16 @@ def _confined_version_child():
         require(type(error.errno) is int and error.errno == errno.EACCES)
     else:
         raise RuntimeError(ERROR)
+    for path, flags in (
+            (sdk_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC),
+            (Path('/proc/self/fd/3'), os.O_RDONLY | os.O_CLOEXEC),
+            (sdk_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)):
+        try:
+            os.open(path, flags)
+        except PermissionError as error:
+            require(type(error.errno) is int and error.errno == errno.EACCES)
+        else:
+            raise RuntimeError(ERROR)
     os.set_inheritable(3, False)
     _restrict_version_metadata(library)
     os.execve(3, ('/proc/self/fd/3', 'version'), os.environ.copy())
@@ -514,6 +579,17 @@ class PreparedPlatformTools:
         start = last = time.monotonic_ns()
         _, abi = _landlock_api()
         require(abi == self._landlock_abi)
+        self._phase = 'VERSION_STATIC_IMAGE_GATE'
+        _, sdk_fd, before = self._binding
+        raw = os.pread(sdk_fd, ADB_BYTES + 1, 0)
+        require(type(raw) is bytes and len(raw) == ADB_BYTES
+                and hashlib.sha256(raw).hexdigest() == ADB_SHA256
+                and sdk_identity(os.fstat(sdk_fd)) == before)
+        _require_static_version_image(raw)
+        now = time.monotonic_ns()
+        require(last <= now <= start + 5_000_000_000)
+        last = now
+        self._phase = 'VERSION_PROBE'
         programs = []
         for name in (sys.executable, __file__):
             path = Path(name).resolve(strict=True)
@@ -606,10 +682,14 @@ class PreparedPlatformTools:
         self._probe = dict(exit_code=0, publisher_build_id=BUILD, bounded_polls=attempt + 1,
             stdout_bytes=len(out), stderr_bytes=0, actual_linux_version_probe=True,
             actual_version_landlock_write_actions_enforced=True, landlock_abi=abi,
-            handled_access_fs=_LANDLOCK_WRITES, inherited_writable_regular_files=False,
+            handled_access_fs=_LANDLOCK_VERSION_ACCESS, inherited_writable_regular_files=False,
             actual_version_metadata_syscalls_and_open_flags_enforced=True,
             seccomp_arch='x86_64', seccomp_default='EPERM',
             seccomp_x32_or_other_arch='KILL_PROCESS', seccomp_denial_probes=7,
+            actual_version_path_read_and_reopen_denied=True,
+            landlock_execute_allowed_only_held_sdk=True, read_path_denial_probes=3,
+            inherited_sdk_read_denial_probes=3,
+            static_ELF_no_interpreter_or_dynamic_segment=True,
             isolated_version_environment=True,
             source_script_sha256=programs[1][3], interpreter_sha256=programs[0][3],
             general_no_generation_reopen_endpoint_or_factory_admission=False)
