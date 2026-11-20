@@ -59,6 +59,12 @@ _SECCOMP_KILL = 0x80000000
 # DT_NEEDED, search-path, audit/filter or unrecognized dynamic tag is supported.
 _STATIC_DYNAMIC_TAGS = frozenset(range(2, 15)) | frozenset(range(16, 24)) | frozenset(
     (0x6ffffff0, 0x6ffffff9, 0x6ffffffa, 0x6ffffffb, 0x6ffffffc))
+_VERSION_INTERPRETER = '/lib64/ld-linux-x86-64.so.2'
+_VERSION_INTERPRETER_FILE = '/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2'
+_VERSION_DIRECT_LIBRARIES = (
+    b'libdl.so.2', b'libpthread.so.0', b'libm.so.6', b'librt.so.1',
+    b'libgcc_s.so.1', b'libc.so.6', b'ld-linux-x86-64.so.2',
+)
 
 
 class _SockFilter(ctypes.Structure):
@@ -81,8 +87,7 @@ class _VersionRuntimeUnsupported(RuntimeError):
         super().__init__(ERROR)
 
 
-def _require_static_version_image(raw):
-    """Used on the actual hash-bound SDK fd before any version child setup."""
+def _version_image_segments(raw):
     require(type(raw) is bytes and 64 <= len(raw) <= 64 * 1024 * 1024)
     header = struct.unpack_from('<16sHHIQQQIHHHHHH', raw)
     ident, kind, machine, version, entry, offset = header[:6]
@@ -90,7 +95,7 @@ def _require_static_version_image(raw):
             and machine == 62 and version == 1 and header[8] == 64
             and header[9] == 56 and 1 <= header[10] <= 128
             and 64 <= offset <= len(raw) - header[10] * 56)
-    executable_entry, interpreter, loads, dynamics = False, False, [], []
+    executable_entry, interpreters, loads, dynamics = False, [], [], []
     for index in range(header[10]):
         segment, flags, start, address, _, size, memory, _ = struct.unpack_from(
             '<IIQQQQQQ', raw, offset + index * 56)
@@ -102,9 +107,15 @@ def _require_static_version_image(raw):
         elif segment == 2:
             dynamics.append((start, address, size))
         elif segment == 3:
-            interpreter = True
+            interpreters.append((start, size))
     require(executable_entry)
-    if interpreter:
+    return interpreters, loads, dynamics
+
+
+def _require_static_version_image(raw):
+    """Used on the actual hash-bound SDK fd before any version child setup."""
+    interpreters, loads, dynamics = _version_image_segments(raw)
+    if interpreters:
         # Kernel open_exec of PT_INTERP needs a separately owned execute/read
         # source. Never silently extend the held-SDK-only execute rule.
         raise _VersionRuntimeUnsupported(1)
@@ -126,6 +137,40 @@ def _require_static_version_image(raw):
             elif tag not in _STATIC_DYNAMIC_TAGS:
                 raise _VersionRuntimeUnsupported(3)
         require(terminated)
+
+
+def _require_fixed_version_runtime(raw):
+    interpreters, loads, dynamics = _version_image_segments(raw)
+    require(len(interpreters) == len(dynamics) == 1)
+    start, size = interpreters[0]
+    require(size == len(_VERSION_INTERPRETER) + 1
+            and raw[start:start + size] == _VERSION_INTERPRETER.encode('ascii') + b'\0')
+    start, address, size = dynamics[0]
+    require(16 <= size <= 65536 and size % 16 == 0
+            and any(base <= start and start + size <= base + length
+                    and address == virtual + start - base for base, virtual, length in loads))
+    needed, strings, sizes = [], [], []
+    for offset in range(start, start + size, 16):
+        tag, value = struct.unpack_from('<qQ', raw, offset)
+        if tag == 0:
+            require(value == 0 and not any(raw[offset + 16:start + size]))
+            break
+        if tag == 1:
+            require(len(needed) < len(_VERSION_DIRECT_LIBRARIES))
+            needed.append(value)
+        elif tag == 5:
+            strings.append(value)
+        elif tag == 10:
+            sizes.append(value)
+    else:
+        raise RuntimeError(ERROR)
+    require(len(strings) == len(sizes) == 1 and 1 <= sizes[0] <= 65536)
+    locations = [base + strings[0] - virtual for base, virtual, length in loads
+                 if virtual <= strings[0] and strings[0] + sizes[0] <= virtual + length]
+    require(len(locations) == 1 and len(needed) == len(_VERSION_DIRECT_LIBRARIES))
+    table = raw[locations[0]:locations[0] + sizes[0]]
+    for offset, name in zip(needed, _VERSION_DIRECT_LIBRARIES):
+        require(0 < offset < len(table) and table.startswith(name + b'\0', offset))
 
 
 def _version_seccomp_filter():
@@ -410,6 +455,9 @@ class PreparedPlatformTools:
         self._sdk = None
         self._host = self._host_binding = self._host_stamp = None
         self._probe_programs = []
+        self._version_interpreter = None
+        self._runtime_pin_attempted = False
+        self._runtime_open_unknown = False
         self._phase = 'NEW'
 
     def _original(self):
@@ -605,10 +653,67 @@ class PreparedPlatformTools:
         require(sdk_identity(os.fstat(fd)) == before and os.get_inheritable(fd) is False)
         require(hashlib.sha256(os.pread(fd, ADB_BYTES + 1, 0)).hexdigest() == ADB_SHA256)
 
+    def _pin_version_interpreter(self, start, last):
+        self._original()
+        require(self._host is None and self._state == 'BOUND'
+                and self._phase == 'VERSION_INTERPRETER_BINDING'
+                and self._version_interpreter is None and not self._runtime_pin_attempted)
+        self._runtime_pin_attempted = True
+
+        def check_budget():
+            nonlocal last
+            now = time.monotonic_ns()
+            require(last <= now <= start + 5_000_000_000)
+            last = now
+
+        def open_component(name, parent, flags):
+            check_budget()
+            self._runtime_open_unknown = True
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | flags,
+                             dir_fd=parent)
+            except OSError:
+                self._runtime_open_unknown = False
+                raise RuntimeError(ERROR) from None
+            require(type(fd) is int and fd >= 0 and fd not in self._fds
+                    and fd not in self._sdk._fds)
+            self._fds.append(fd)
+            self._runtime_open_unknown = False
+            require(fd >= 3 and os.get_inheritable(fd) is False)
+            check_budget()
+            return fd
+
+        logical, canonical = Path(_VERSION_INTERPRETER), Path(_VERSION_INTERPRETER_FILE)
+        check_budget()
+        require(logical.resolve(strict=True) == canonical)
+        parent = None
+        for part in canonical.parts[:-1]:
+            parent = open_component(part, parent, os.O_DIRECTORY)
+            info = os.fstat(parent)
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022)
+        fd = open_component(canonical.name, parent, os.O_NONBLOCK)
+        info = os.fstat(fd)
+        before = identity(info)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
+                and info.st_mode & stat.S_IXUSR and not info.st_mode & 0o7022
+                and 64 <= info.st_size <= 16 * 1024 * 1024)
+        check_budget()
+        raw = os.pread(fd, info.st_size + 1, 0)
+        require(type(raw) is bytes and len(raw) == info.st_size)
+        interpreters, _, _ = _version_image_segments(raw)
+        require(not interpreters)
+        digest = hashlib.sha256(raw).hexdigest()
+        check_budget()
+        require(logical.resolve(strict=True) == canonical
+                and identity(canonical.lstat()) == identity(os.fstat(fd)) == before)
+        check_budget()
+        self._version_interpreter = (fd, before, digest)
+
     def probe_version_once(self):
         require(self._host is None)
         self.verify_sdk(self._sdk)
-        require(self._pid is None and not self._child_unknown)
+        require(self._pid is None and not self._child_unknown
+                and not self._runtime_pin_attempted)
         self._phase = 'VERSION_PROBE'
         start = last = time.monotonic_ns()
         _, abi = _landlock_api()
@@ -627,6 +732,11 @@ class PreparedPlatformTools:
             self._phase = ('VERSION_IMAGE_PT_INTERP_UNSUPPORTED',
                            'VERSION_IMAGE_DT_NEEDED_UNSUPPORTED',
                            'VERSION_IMAGE_DYNAMIC_TAG_UNSUPPORTED')[unsupported.reason - 1]
+            if unsupported.reason == 1:
+                _require_fixed_version_runtime(raw)
+                self._phase = 'VERSION_INTERPRETER_BINDING'
+                self._pin_version_interpreter(start, last)
+                self._phase = 'VERSION_INTERPRETER_BOUND_RUNTIME_CLOSURE_REQUIRED'
             raise RuntimeError(ERROR) from None
         now = time.monotonic_ns()
         require(last <= now <= start + 5_000_000_000)
@@ -745,7 +855,8 @@ class PreparedPlatformTools:
                 and host._handle_owner is host and host._state == 'CONSUMING'
                 and host._sdk is self._sdk and host._platform_tools_source is self
                 and host._platform_tools_binding is None and self._host is None
-                and not self._child_unknown and not self._close_uncertain)
+                and not self._child_unknown and not self._close_uncertain
+                and not self._runtime_pin_attempted)
         self._host = host
         try:
             host._stable()
@@ -824,7 +935,7 @@ class PreparedPlatformTools:
         self._original()
         require((self._sdk is None or self._sdk._handle_owner is self._sdk)
                 and self._state not in ('HOST_UNKNOWN', 'HOST_CLOSED')
-                and not self._child_unknown and not self._close_uncertain
+                and not self._child_unknown and not self._close_uncertain and not self._runtime_open_unknown
                 and (self._sdk is None or self._sdk._state == 'CLOSED'
                 or self._sdk._state == 'FAILED' and not self._sdk._fds
                 and not self._sdk._registered and not self._sdk._uncertain and not self._sdk._open_unknown))
@@ -843,6 +954,7 @@ class PreparedPlatformTools:
         self._guard()
         while self._fds:
             self._close_fd(self._fds[-1])
+        self._version_interpreter = None
         for path, before in reversed(self._created):
             require(identity(self._cleanup_call(path.lstat)) == before
                     and not self._cleanup_call(path.is_symlink))
@@ -890,9 +1002,11 @@ def controlled_verify():
         if hasattr(task, '_capabilities'):
             proof['host_capabilities'] = task._capabilities
         proof['child_unknown'] = task._child_unknown
+        if task._runtime_open_unknown:
+            proof['runtime_open_unknown'] = True
     finally:
         try:
-            if not task._child_unknown:
+            if not task._child_unknown and not task._runtime_open_unknown:
                 if resource is not None:
                     if resource._state == 'READY':
                         resource.close()

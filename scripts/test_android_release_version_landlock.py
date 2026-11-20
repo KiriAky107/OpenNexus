@@ -575,6 +575,78 @@ class VersionDynamicImage(unittest.TestCase):
             with patch.object(subject, '_require_static_version_image', side_effect=error):
                 self.assertEqual(self.owner_gate(self.image()), 1)
 
+    @classmethod
+    def fixed_runtime_image(cls):
+        names = bytearray(b'\0')
+        tags = []
+        for name in subject._VERSION_DIRECT_LIBRARIES:
+            tags.append((1, len(names)))
+            names.extend(name + b'\0')
+        tags.extend(((5, 0x400380), (10, len(names)), (0, 0)))
+        raw = bytearray(cls.image(tags, interpreter=True))
+        raw[896:896 + len(names)] = names
+        return raw
+
+    def test_fixed_runtime_requires_exact_interpreter_and_needed_strings(self):
+        raw = self.fixed_runtime_image()
+        self.assertIsNone(subject._require_fixed_version_runtime(bytes(raw)))
+        for position in (800, 800 + len(subject._VERSION_INTERPRETER), 897):
+            changed = raw.copy()
+            changed[position] ^= 1
+            with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
+                subject._require_fixed_version_runtime(bytes(changed))
+
+    def test_fixed_runtime_mapping_ambiguity_or_malformed_needed_offset_rejects(self):
+        for slot, value in ((520, 0), (520, 65536), (632, 0xffffffffffffffff)):
+            raw = self.fixed_runtime_image()
+            struct.pack_into('<Q', raw, slot, value)
+            with self.assertRaisesRegex(RuntimeError, '^' + subject.ERROR + '$'):
+                subject._require_fixed_version_runtime(bytes(raw))
+
+    def test_hash_bound_dynamic_image_binds_before_program_or_pipe_setup(self):
+        with patch.object(subject.PreparedPlatformTools, '_pin_version_interpreter',
+                          autospec=True) as pin:
+            self.assertEqual(self.owner_gate(bytes(self.fixed_runtime_image()),
+                phase='VERSION_INTERPRETER_BOUND_RUNTIME_CLOSURE_REQUIRED'), 1)
+            pin.assert_called_once()
+            self.assertEqual(pin.call_args.args[1:], (100, 100))
+
+    def test_interpreter_binding_pins_canonical_file_and_rejects_unknown_open(self):
+        image = VersionStaticImage.image()
+        directory = os.stat_result((stat.S_IFDIR | 0o755, 1, 2, 1, 0, 0, 0, 0, 0, 0))
+        binary = os.stat_result((stat.S_IFREG | 0o755, 3, 2, 1, 0, 0, len(image), 0, 0, 0))
+        canonical_path = PurePosixPath(subject._VERSION_INTERPRETER_FILE)
+        canonical = SimpleNamespace(parts=canonical_path.parts, name=canonical_path.name,
+                                    lstat=lambda: binary)
+        logical = SimpleNamespace(resolve=Mock(return_value=canonical))
+        for uncertain in (False, True):
+            task = subject.PreparedPlatformTools()
+            task._state, task._phase = 'BOUND', 'VERSION_INTERPRETER_BINDING'
+            task._sdk = SimpleNamespace(_fds=[55])
+            native = SimpleNamespace(O_RDONLY=0, O_NOFOLLOW=1, O_CLOEXEC=2,
+                O_DIRECTORY=4, O_NONBLOCK=8, get_inheritable=Mock(return_value=False),
+                fstat=Mock(side_effect=lambda fd: binary if fd == 14 else directory),
+                pread=Mock(return_value=image),
+                open=Mock(side_effect=[10, 11, 12, 13, KeyboardInterrupt() if uncertain else 14]))
+            with patch.object(task, '_original'), patch.object(subject, 'os', native), \
+                    patch.object(subject, 'Path', side_effect=[logical, canonical]), \
+                    patch.object(subject.time, 'monotonic_ns', return_value=1):
+                if uncertain:
+                    with self.assertRaises(KeyboardInterrupt):
+                        task._pin_version_interpreter(0, 0)
+                    self.assertTrue(task._runtime_open_unknown)
+                    self.assertIsNone(task._version_interpreter)
+                    native.pread.assert_not_called()
+                    self.assertEqual(task._fds, [10, 11, 12, 13])
+                else:
+                    task._pin_version_interpreter(0, 0)
+                    self.assertFalse(task._runtime_open_unknown)
+                    self.assertEqual(task._version_interpreter[0], 14)
+                    self.assertEqual(task._fds, [10, 11, 12, 13, 14])
+                    native.pread.assert_called_once_with(14, len(image) + 1, 0)
+                self.assertEqual([c.kwargs['dir_fd'] for c in native.open.call_args_list],
+                                 [None, 10, 11, 12, 13])
+
 
 if __name__ == '__main__':
     unittest.main()
