@@ -261,7 +261,47 @@ class ProcessProjection(unittest.TestCase):
             with self.assertRaises(RuntimeError):validation.validate_killed(associated,killed,p0,p1,DEVICE,hold,held,release,released)
 
 
+def with_delivered_changes(provider):
+    result = deepcopy(provider)
+    result['delivery']['counts']['changes:200'] += 1
+    result['delivery']['events'].append(dict(
+        action='changes', service_status=200, delivery_status=200, fault_operation=None))
+    return result
+
+
 class ProcessValidators(unittest.TestCase):
+    def test_explicit_process_recovery_requires_a_new_delivered_changes_event(self):
+        original = receipt()
+        _, provider, *_ = providers()
+        upload = {k: original[k] for k in ('operation_id', 'file_id', 'path', 'hash')}
+        archived = dict(upload, operation_id=SAVE, state='archived')
+        job = dict(upload, state='committing', remote_revision=None)
+        before = dict(process_stage='killed-read', files=[], drafts={}, saves={},
+                      all_clean_draft_ids=[DRAFT], all_Save_ids=[SAVE], owned_snapshot_identity=IDENTITY,
+                      raw_sha256={'vault/' + snapshots.NOTE: snapshots.HASH},
+                      original_Save_outbox_id=SAVE, original_association_upload_id=UPLOAD,
+                      original_job_commit=[upload], native=dict(
+                          binding=dict(remote_vault=VAULT, cursor=0), association={}, attempts=[dict(attempts=1)],
+                          issuers=[dict(device_id=DEVICE)], conflicts=[],
+                          outbox=[archived, dict(upload, state='queued')], jobs=[job]))
+        revision = {k: v for k, v in original.items() if k not in ('device_id', 'fingerprint')}
+        after = dict(before, process_stage='reconciled', native=dict(
+            before['native'], binding=dict(remote_vault=VAULT, cursor=1),
+            outbox=[archived, dict(upload, state='acked')], jobs=[dict(job, state='acked', remote_revision=1, error=None)],
+            inbox=[dict(state='applied', revision=json.dumps(revision))],
+            heads=[dict(file_id=FILE, revision=1, path=snapshots.NOTE, hash=snapshots.HASH)]))
+        delivered = with_delivered_changes(provider)
+        validation.validate_reconciled(before, after, provider, delivered, original)
+        for status in (None, 503):
+            with self.subTest(delivery_status=status):
+                incomplete = deepcopy(delivered)
+                if status is None:
+                    incomplete['delivery']['events'].pop()
+                else:
+                    incomplete['delivery']['events'][-1]['delivery_status'] = status
+                with self.assertRaisesRegex(RuntimeError, 'ANOTHER_WRITE_OR_NO_ORIGINAL_CHANGES_READ'):
+                    validation.validate_reconciled(before, after, provider, incomplete, original)
+
     def test_once_held_commit_accepts_only_the_two_observed_raw_attempt_outcomes(self):
         for outcome in ('running','interrupted'):
             with self.subTest(outcome=outcome),tempfile.TemporaryDirectory() as folder:
@@ -290,7 +330,7 @@ class ProcessValidators(unittest.TestCase):
     def test_explicit_changes_read_preserves_original_attempt_and_all_write_state(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);a=projection(root/'a','killed-read');b=projection(root/'b','reconciled');_,p0,*_=providers()
-            p1=deepcopy(p0);p1['delivery']['counts']['changes:200']+=1
+            p1=with_delivered_changes(p0)
             validation.validate_reconciled(a,b,p0,p1,receipt())
             for mode in ('attempt','count','upload','Save','new-id','revision','object','new-upload','no-changes','event','not-open-read'):
                 before,after,provider=deepcopy((a,b,p1))

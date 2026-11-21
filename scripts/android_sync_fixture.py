@@ -5,6 +5,7 @@ It forwards each original request once and changes only response delivery after
 the service completes. It never manufactures a revision, receipt or client ACK.
 Actual PG/S3 provisioning, UI phases and provider observation are separate steps.
 """
+from collections import Counter
 from pathlib import Path
 import argparse
 import json
@@ -13,6 +14,7 @@ import re
 import sys
 import android_auth_fixture as original
 from android_auth_fixture import (
+    DELIVERY_EVENT_LIMIT,
     DeliveryProxy as OriginalDeliveryProxy,
     arm_control as original_arm_control,
     initialize_control as original_initialize_control,
@@ -103,6 +105,21 @@ class TargetedDeliveryProxy:
             self.proxy=DeliveryProxy(self.app,self.owner,target,uploads=self.uploads)
         if self.proxy is None:await self.app(scope,receive,send)
         else:await self.proxy(scope,receive,send)
+
+
+def delivered_changes(before, after):
+    # The recorder retains the newest events and cumulative service counters.
+    added_count = sum(after['counts'].values()) - sum(before['counts'].values())
+    if not 0 < added_count <= len(after['events']) <= DELIVERY_EVENT_LIMIT:
+        return False
+    added = after['events'][-added_count:]
+    if (after['events'] != (before['events'] + added)[-DELIVERY_EVENT_LIMIT:]
+            or any(event['action'] != 'changes' for event in added)):
+        return False
+    expected = Counter(before['counts'])
+    expected.update(f"changes:{event['service_status']}" for event in added)
+    delivered = dict(action='changes', service_status=200, delivery_status=200, fault_operation=None)
+    return dict(expected) == after['counts'] and delivered in added
 
 
 def observe_provider(owner, vault_id=None):

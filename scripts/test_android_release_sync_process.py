@@ -101,7 +101,7 @@ class ProcessOrchestrator(unittest.TestCase):
             if mode=='auth-change' and label=='process-killed-read-auth':value['requests']['counts']['refresh:200']=1
             return value
         subject.observe=Mock(side_effect=observe)
-        p0,p1,hold,marker,release,released=base.providers();p2=deepcopy(p1);p2['delivery']['counts']['changes:200']+=1
+        p0,p1,hold,marker,release,released=base.providers();p2=base.with_delivered_changes(p1)
         def provider(label):
             if label=='process-failure':return deepcopy(p1)
             if label=='killed':self.assertTrue(subject.process_raw_killed_preserved)

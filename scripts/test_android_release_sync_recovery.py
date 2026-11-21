@@ -83,7 +83,7 @@ def with_delivered_changes(provider):
     result = deepcopy(provider)
     result['delivery']['counts']['changes:200'] += 1
     events = result['delivery']['events']
-    result['delivery']['events'] = (events + [CHANGES_DELIVERED.copy()])[-runtime.DELIVERY_EVENT_LIMIT:]
+    result['delivery']['events'] = (events + [CHANGES_DELIVERED.copy()])[-fixture.DELIVERY_EVENT_LIMIT:]
     return result
 
 
@@ -265,7 +265,7 @@ class ReleaseRecoveryChecks(unittest.TestCase):
         continued_provider = with_delivered_changes(committed_provider)
         runtime.validate_reconciled(unknown, reconciled, committed_provider, continued_provider, receipt)
         full_history = deepcopy(committed_provider)
-        prior_changes = runtime.DELIVERY_EVENT_LIMIT - 1
+        prior_changes = fixture.DELIVERY_EVENT_LIMIT - 1
         full_history['delivery']['events'][:-1] = [CHANGES_DELIVERED.copy() for _ in range(prior_changes)]
         full_history['delivery']['counts']['changes:200'] = prior_changes
         runtime.validate_reconciled(

@@ -4,6 +4,7 @@ import re
 
 from android_release_sync_process_snapshot import NOTE, HASH, canonical, preserve_note, preserve_open, revision_json
 from android_release_observation import APP
+from android_sync_fixture import delivered_changes
 from android_sync_process_host import LOSS, validate_parent, validate_ready, validate_loss_ready
 from android_runtime_probe import BODY, require
 from android_sync_stop_host import same_fields
@@ -136,9 +137,7 @@ def validate_reconciled(before, after, provider_before, provider_after, receipt)
     require(provider_after['vault'] == provider_before['vault']
             and all(provider_after['rows'][k] == provider_before['rows'][k] for k in ('revisions','files','objects','uploads'))
             and revision_counts(provider_before) == revision_counts(provider_after) == {'revision:200':1}
-            and {k:v for k,v in provider_after['delivery']['counts'].items() if not k.startswith('changes:')} ==
-                {k:v for k,v in provider_before['delivery']['counts'].items() if not k.startswith('changes:')}
-            and provider_after['delivery']['counts'].get('changes:200',0) > provider_before['delivery']['counts'].get('changes:200',0)
+            and delivered_changes(provider_before['delivery'], provider_after['delivery'])
             and [v for v in provider_after['delivery']['events'] if v['action'] != 'changes'] ==
                 [v for v in provider_before['delivery']['events'] if v['action'] != 'changes'],
             'RELEASE_SYNC_PROCESS_ANOTHER_WRITE_OR_NO_ORIGINAL_CHANGES_READ')
