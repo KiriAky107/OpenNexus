@@ -76,15 +76,26 @@ def projection(root, stage):
     root.mkdir();return snapshots.project_recovery(original_fixture(root,stage),root/'working',stage=stage)
 
 
+CHANGES_DELIVERED = dict(action='changes', service_status=200, delivery_status=200, fault_operation=None)
+
+
+def with_delivered_changes(provider):
+    result = deepcopy(provider)
+    result['delivery']['counts']['changes:200'] += 1
+    events = result['delivery']['events']
+    result['delivery']['events'] = (events + [CHANGES_DELIVERED.copy()])[-runtime.DELIVERY_EVENT_LIMIT:]
+    return result
+
+
 def providers():
     receipt=original_receipt();remote={k:v for k,v in receipt.items() if k!='vault_id'}
     before=dict(vault=dict(id=base.VAULT,sequence=0),rows=dict(revisions=[],files=[],objects=[],uploads=[],device_progress=[]),
-        delivery=dict(counts={'changes:200':1},events=[]))
+        delivery=dict(counts={'changes:200':1},events=[CHANGES_DELIVERED.copy()]))
     after=deepcopy(before);after['vault']['sequence']=1
     after['rows'].update(revisions=[remote],objects=[dict(hash=snapshots.HASH,size=len(runtime.BODY.encode()))],
         files=[dict(file_id=FILE,sequence=1,path_key=snapshots.NOTE,deleted=0)])
     after['delivery']['counts']['revision:200']=1
-    after['delivery']['events']=[dict(action='revision',service_status=200,delivery_status=503,fault_operation=CONTROL)]
+    after['delivery']['events'].append(dict(action='revision',service_status=200,delivery_status=503,fault_operation=CONTROL))
     control=dict(operation_id=CONTROL,mode='drop_revision',expected_revision=0,result_revision=1)
     marker=dict(operation_id=CONTROL,mode='drop_revision',revision=1,action='revision',service_status=200,service_response_complete=True,raw_body_recorded=False)
     return before,after,control,marker
@@ -213,7 +224,7 @@ class ReleaseRecoveryChecks(unittest.TestCase):
     def test_reconcile_needs_changes_read_same_original_and_preserved_failed_attempt(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);before=projection(root/'before','unknown');after=projection(root/'after','reconciled')
-            _,p0,_,_=providers();p1=deepcopy(p0);p1['delivery']['counts']['changes:200']+=1
+            _,p0,_,_=providers();p1=with_delivered_changes(p0)
             runtime.validate_reconciled(before,after,p0,p1,original_receipt())
             for table,key,value in [('attempts','outcome','succeeded'),('attempts','attempts',2),('issuers','device_id','other'),('outbox','operation_id',CONTROL),('outbox','state','pending')]:
                 changed=deepcopy(after);changed['native'][table][0][key]=value
@@ -251,11 +262,14 @@ class ReleaseRecoveryChecks(unittest.TestCase):
             heads=[dict(file_id=FILE, revision=1, path=snapshots.NOTE, hash=snapshots.HASH)]))
         self.assertEqual(runtime.validate_unknown(
             associated, unknown, before_provider, committed_provider, ANDROID, control, marker), receipt)
-        continued_provider = deepcopy(committed_provider)
-        continued_provider['delivery']['counts']['changes:200'] += 1
-        continued_provider['delivery']['events'].append(dict(
-            action='changes', service_status=200, delivery_status=200, fault_operation=None))
+        continued_provider = with_delivered_changes(committed_provider)
         runtime.validate_reconciled(unknown, reconciled, committed_provider, continued_provider, receipt)
+        full_history = deepcopy(committed_provider)
+        prior_changes = runtime.DELIVERY_EVENT_LIMIT - 1
+        full_history['delivery']['events'][:-1] = [CHANGES_DELIVERED.copy() for _ in range(prior_changes)]
+        full_history['delivery']['counts']['changes:200'] = prior_changes
+        runtime.validate_reconciled(
+            unknown, reconciled, full_history, with_delivered_changes(full_history), receipt)
 
         for extra in ('event', 'counter', 'both'):
             with self.subTest(extra_revision_evidence=extra):
@@ -268,7 +282,18 @@ class ReleaseRecoveryChecks(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_REVISION_NOT_ONCE'):
                     runtime.validate_unknown(associated, unknown, before_provider, duplicate, ANDROID, control, marker)
 
-        continued_provider['delivery']['events'][0]['fault_operation'] = OP
+        for delivery_status in (None, 503):
+            with self.subTest(changes_delivery_status=delivery_status):
+                only_service_success = deepcopy(continued_provider)
+                if delivery_status is None:
+                    only_service_success['delivery']['events'].pop()
+                else:
+                    only_service_success['delivery']['events'][-1]['delivery_status'] = delivery_status
+                with self.assertRaisesRegex(RuntimeError, 'ANOTHER_WRITE_OR_NO_CHANGES_READ'):
+                    runtime.validate_reconciled(
+                        unknown, reconciled, committed_provider, only_service_success, receipt)
+
+        continued_provider['delivery']['events'][-2]['fault_operation'] = OP
         with self.assertRaisesRegex(RuntimeError, 'ANOTHER_WRITE_OR_NO_CHANGES_READ'):
             runtime.validate_reconciled(unknown, reconciled, committed_provider, continued_provider, receipt)
 
@@ -322,7 +347,7 @@ class RecoveryRecordingChecks(unittest.TestCase):
         subject.observe=Mock(return_value=auth_provider)
         subject.original_association=Mock(return_value={k:association[k] for k in ('operation_id','preview_fingerprint','remote_vault')})
         subject.recovery_snapshot=Mock(side_effect=lambda label,stage:(values[stage],runtime.BODY.encode()))
-        p0,p1,control,marker=providers();p2=deepcopy(p1);p2['delivery']['counts']['changes:200']+=1
+        p0,p1,control,marker=providers();p2=with_delivered_changes(p1)
         subject.sync_provider=Mock(side_effect=lambda label:dict(associated=p0,unknown=p1,**{'unknown-read':p1,'reconciled':p2,'cold':p2})[label])
         subject.phases=[]
         def phase(name,label):

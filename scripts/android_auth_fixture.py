@@ -16,6 +16,7 @@ import time
 import uuid
 
 SERVICE_SHA = '29e2e6d373ea752352981bdad05d34a7a0d9c3d9'
+DELIVERY_EVENT_LIMIT = 64
 MODES = {'normal', 'drop_login', 'drop_refresh', 'drop_logout', 'hold_login', 'release'}
 SAFE_CODES = {'OWNED_AUTH_HOST_REQUIRED','OWNED_AUTH_RUN_INVALID','OWNED_AUTH_ROOT_INVALID','OWNED_AUTH_FILE_INVALID',
     'OWNED_AUTH_CONTROL_INVALID','OWNED_AUTH_CONTROL_MISMATCH','OWNED_AUTH_CONTROL_CHANGED','OWNED_AUTH_CONTROL_UNCERTAIN',
@@ -137,7 +138,7 @@ class DeliveryProxy:
             key=action+':'+str(status)
             data['counts'][key]=data['counts'].get(key,0)+1
             data['events']=(data['events']+[{'action':action,'service_status':status,'delivery_status':delivered_status,
-                'fault_operation':fault}])[-64:]
+                'fault_operation':fault}])[-DELIVERY_EVENT_LIMIT:]
             atomic_json(path,data)
 
     async def __call__(self, scope, receive, send):

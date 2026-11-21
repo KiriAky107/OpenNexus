@@ -1,9 +1,10 @@
 """One signed original commit response loss and explicit changes-read recovery."""
+from collections import Counter
 import json
 import os
 import uuid
 
-from android_auth_fixture import read_json
+from android_auth_fixture import DELIVERY_EVENT_LIMIT, read_json
 from android_auth_runtime import active_intent, expect_requests, provider_account
 from android_release_auth import main
 from android_release_observation import APP, StoppedReleaseObserver, exclusive
@@ -70,6 +71,21 @@ def validate_unknown(before, after, provider_before, provider, device, control, 
     return receipt
 
 
+def _delivered_changes(before, after):
+    # The recorder retains the newest events and cumulative service counters.
+    added_count = sum(after['counts'].values()) - sum(before['counts'].values())
+    if not 0 < added_count <= len(after['events']) <= DELIVERY_EVENT_LIMIT:
+        return False
+    added = after['events'][-added_count:]
+    if (after['events'] != (before['events'] + added)[-DELIVERY_EVENT_LIMIT:]
+            or any(event['action'] != 'changes' for event in added)):
+        return False
+    expected = Counter(before['counts'])
+    expected.update(f"changes:{event['service_status']}" for event in added)
+    delivered = dict(action='changes', service_status=200, delivery_status=200, fault_operation=None)
+    return dict(expected) == after['counts'] and delivered in added
+
+
 def validate_reconciled(before, after, provider_before, provider_after, receipt):
     preserve_note(before,after); a,b = before['native'],after['native']
     require(after['recovery_stage'] == 'reconciled' and b['binding'] == dict(a['binding'],cursor=1)
@@ -81,9 +97,7 @@ def validate_reconciled(before, after, provider_before, provider_after, receipt)
             'RELEASE_SYNC_RECOVERY_REPLACED_OR_RELABELLED_ORIGINAL')
     require(provider_after['vault'] == provider_before['vault']
             and all(provider_after['rows'][k] == provider_before['rows'][k] for k in ('revisions','files','objects','uploads'))
-            and {k:v for k,v in provider_after['delivery']['counts'].items() if not k.startswith('changes:')} ==
-                {k:v for k,v in provider_before['delivery']['counts'].items() if not k.startswith('changes:')}
-            and provider_after['delivery']['counts'].get('changes:200',0) > provider_before['delivery']['counts'].get('changes:200',0)
+            and _delivered_changes(provider_before['delivery'], provider_after['delivery'])
             and [v for v in provider_after['delivery']['events'] if v['action'] != 'changes'] ==
                 [v for v in provider_before['delivery']['events'] if v['action'] != 'changes'],
             'RELEASE_SYNC_RECOVERY_ANOTHER_WRITE_OR_NO_CHANGES_READ')
