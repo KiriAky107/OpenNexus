@@ -60,9 +60,11 @@ def validate_unknown(before, after, provider_before, provider, device, control, 
     require(provider['rows']['objects'] == [dict(hash=HASH,size=len(BODY.encode()))]
             and provider['rows']['files'] == [dict(file_id=original['file_id'],sequence=1,path_key=NOTE,deleted=0)]
             and not provider['rows']['uploads'], 'RELEASE_SYNC_RECOVERY_ORIGINAL_PROVIDER_BYTES_SCOPE')
-    events = [v for v in provider['delivery']['events'] if v['fault_operation'] == control['operation_id']]
+    events = [v for v in provider['delivery']['events']
+              if v['action'] == 'revision' or v['fault_operation'] == control['operation_id']]
+    revision_counts = {k:v for k,v in provider['delivery']['counts'].items() if k.startswith('revision:')}
     require(events == [dict(action='revision',service_status=200,delivery_status=503,fault_operation=control['operation_id'])]
-            and provider['delivery']['counts'].get('revision:200') == 1
+            and revision_counts == {'revision:200': 1}
             and not any(k.startswith('revision:') for k in provider_before['delivery']['counts']),
             'RELEASE_SYNC_RECOVERY_ORIGINAL_REVISION_NOT_ONCE')
     return receipt
@@ -81,7 +83,9 @@ def validate_reconciled(before, after, provider_before, provider_after, receipt)
             and all(provider_after['rows'][k] == provider_before['rows'][k] for k in ('revisions','files','objects','uploads'))
             and {k:v for k,v in provider_after['delivery']['counts'].items() if not k.startswith('changes:')} ==
                 {k:v for k,v in provider_before['delivery']['counts'].items() if not k.startswith('changes:')}
-            and provider_after['delivery']['counts'].get('changes:200',0) > provider_before['delivery']['counts'].get('changes:200',0),
+            and provider_after['delivery']['counts'].get('changes:200',0) > provider_before['delivery']['counts'].get('changes:200',0)
+            and [v for v in provider_after['delivery']['events'] if v['action'] != 'changes'] ==
+                [v for v in provider_before['delivery']['events'] if v['action'] != 'changes'],
             'RELEASE_SYNC_RECOVERY_ANOTHER_WRITE_OR_NO_CHANGES_READ')
     inbox, = b['inbox']; revision = json.loads(inbox['revision'])
     keys = ('operation_id','file_id','base_revision','path','operation','hash','size','sequence','vault_id')

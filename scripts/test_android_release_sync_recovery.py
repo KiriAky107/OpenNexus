@@ -226,6 +226,52 @@ class ReleaseRecoveryChecks(unittest.TestCase):
                 if mode=='no-changes':changed['delivery']['counts']['changes:200']=p0['delivery']['counts']['changes:200']
                 with self.subTest(mode=mode),self.assertRaises(RuntimeError):runtime.validate_reconciled(before,after,p0,changed,original_receipt())
 
+    def test_revision_history_stays_original_across_the_read_only_recovery(self):
+        before_provider, committed_provider, control, marker = providers()
+        receipt = original_receipt()
+        note = dict(files=[], drafts={}, saves={}, all_clean_draft_ids=[DRAFT], all_Save_ids=[SAVE],
+                    raw_sha256={'vault/' + snapshots.NOTE: snapshots.HASH},
+                    original_Save_outbox_id=SAVE, original_association_upload_id=OP)
+        upload = {k: receipt[k] for k in ('operation_id', 'file_id', 'path', 'hash')}
+        archived = dict(upload, operation_id=SAVE, state='archived')
+        binding = dict(remote_vault=base.VAULT, cursor=0)
+        job = dict(upload, size=receipt['size'], state='committing', remote_revision=None)
+        associated = dict(note, recovery_stage='associated', native=dict(
+            binding=binding, association={}, outbox=[archived, dict(upload, state='pending')]))
+        unknown = dict(note, recovery_stage='unknown', original_job_commit=[upload], native=dict(
+            binding=binding, association={}, outbox=[archived, dict(upload, state='queued')],
+            jobs=[job], attempts=[dict(outcome='failed', attempts=1)], conflicts=[],
+            issuers=[dict(operation_id=OP, device_id=ANDROID)]))
+        revision = {k: v for k, v in receipt.items() if k not in ('device_id', 'fingerprint')}
+        reconciled = dict(unknown, recovery_stage='reconciled', native=dict(
+            unknown['native'], binding=dict(binding, cursor=1),
+            jobs=[dict(job, state='acked', remote_revision=1, error=None)],
+            outbox=[archived, dict(upload, state='acked')],
+            inbox=[dict(state='applied', revision=json.dumps(revision))],
+            heads=[dict(file_id=FILE, revision=1, path=snapshots.NOTE, hash=snapshots.HASH)]))
+        self.assertEqual(runtime.validate_unknown(
+            associated, unknown, before_provider, committed_provider, ANDROID, control, marker), receipt)
+        continued_provider = deepcopy(committed_provider)
+        continued_provider['delivery']['counts']['changes:200'] += 1
+        continued_provider['delivery']['events'].append(dict(
+            action='changes', service_status=200, delivery_status=200, fault_operation=None))
+        runtime.validate_reconciled(unknown, reconciled, committed_provider, continued_provider, receipt)
+
+        for extra in ('event', 'counter', 'both'):
+            with self.subTest(extra_revision_evidence=extra):
+                duplicate = deepcopy(committed_provider)
+                if extra != 'counter':
+                    duplicate['delivery']['events'].append(dict(
+                        action='revision', service_status=409, delivery_status=409, fault_operation=None))
+                if extra != 'event':
+                    duplicate['delivery']['counts']['revision:409'] = 1
+                with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_REVISION_NOT_ONCE'):
+                    runtime.validate_unknown(associated, unknown, before_provider, duplicate, ANDROID, control, marker)
+
+        continued_provider['delivery']['events'][0]['fault_operation'] = OP
+        with self.assertRaisesRegex(RuntimeError, 'ANOTHER_WRITE_OR_NO_CHANGES_READ'):
+            runtime.validate_reconciled(unknown, reconciled, committed_provider, continued_provider, receipt)
+
     def test_unknown_original_Save_stops_before_login_setup_control_or_cycle(self):
         subject=object.__new__(runtime.ReleaseSyncRecovery);subject.prepare=Mock();subject.enable_test_ime=Mock();subject.restore_test_ime=Mock();subject.phase=Mock();subject.recovery_snapshot=Mock()
         with patch.object(runtime.ReleaseUpgrade,'phase',side_effect=TimeoutError()) as seed,patch.object(runtime,'Setup') as setup,patch.object(runtime,'arm_control') as control,self.assertRaises(TimeoutError):subject.run()
